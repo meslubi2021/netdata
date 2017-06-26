@@ -102,7 +102,7 @@ static inline calculated_number eval_variable(EVAL_EXPRESSION *exp, EVAL_VARIABL
     }
 
     if(unlikely(v->hash == now_hash && !strcmp(v->name, "now"))) {
-        n = time(NULL);
+        n = now_realtime_sec();
         buffer_strcat(exp->error_msg, "[ $now = ");
         print_parsed_as_constant(exp->error_msg, n);
         buffer_strcat(exp->error_msg, " ] ");
@@ -723,7 +723,7 @@ static inline int parse_variable(const char **string, char *buffer, size_t len) 
 
 static inline int parse_constant(const char **string, calculated_number *number) {
     char *end = NULL;
-    calculated_number n = strtold(*string, &end);
+    calculated_number n = str2ld(*string, &end);
     if(unlikely(!end || *string == end)) {
         *number = 0;
         return 0;

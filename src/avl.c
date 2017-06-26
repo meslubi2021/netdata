@@ -283,18 +283,30 @@ avl *avl_remove(avl_tree *tree, avl *item) {
 // ---------------------------
 // traversing
 
-void avl_walker(avl *node, void (*callback)(void *entry, void *data), void *data) {
-    if(node->avl_link[0])
-        avl_walker(node->avl_link[0], callback, data);
+int avl_walker(avl *node, int (*callback)(void *entry, void *data), void *data) {
+    int total = 0, ret = 0;
 
-    callback(node, data);
+    if(node->avl_link[0]) {
+        ret = avl_walker(node->avl_link[0], callback, data);
+        if(ret < 0) return ret;
+        total += ret;
+    }
 
-    if(node->avl_link[1])
-        avl_walker(node->avl_link[1], callback, data);
+    ret = callback(node, data);
+    if(ret < 0) return ret;
+    total += ret;
+
+    if(node->avl_link[1]) {
+        ret = avl_walker(node->avl_link[1], callback, data);
+        if (ret < 0) return ret;
+        total += ret;
+    }
+
+    return total;
 }
 
-void avl_traverse(avl_tree *t, void (*callback)(void *entry, void *data), void *data) {
-    avl_walker(t->root, callback, data);
+int avl_traverse(avl_tree *t, int (*callback)(void *entry, void *data), void *data) {
+    return avl_walker(t->root, callback, data);
 }
 
 // ---------------------------
@@ -303,9 +315,9 @@ void avl_traverse(avl_tree *t, void (*callback)(void *entry, void *data), void *
 void avl_read_lock(avl_tree_lock *t) {
 #ifndef AVL_WITHOUT_PTHREADS
 #ifdef AVL_LOCK_WITH_MUTEX
-    pthread_mutex_lock(&t->mutex);
+    netdata_mutex_lock(&t->mutex);
 #else
-    pthread_rwlock_rdlock(&t->rwlock);
+    netdata_rwlock_rdlock(&t->rwlock);
 #endif
 #endif /* AVL_WITHOUT_PTHREADS */
 }
@@ -313,9 +325,9 @@ void avl_read_lock(avl_tree_lock *t) {
 void avl_write_lock(avl_tree_lock *t) {
 #ifndef AVL_WITHOUT_PTHREADS
 #ifdef AVL_LOCK_WITH_MUTEX
-    pthread_mutex_lock(&t->mutex);
+    netdata_mutex_lock(&t->mutex);
 #else
-    pthread_rwlock_wrlock(&t->rwlock);
+    netdata_rwlock_wrlock(&t->rwlock);
 #endif
 #endif /* AVL_WITHOUT_PTHREADS */
 }
@@ -323,9 +335,9 @@ void avl_write_lock(avl_tree_lock *t) {
 void avl_unlock(avl_tree_lock *t) {
 #ifndef AVL_WITHOUT_PTHREADS
 #ifdef AVL_LOCK_WITH_MUTEX
-    pthread_mutex_unlock(&t->mutex);
+    netdata_mutex_unlock(&t->mutex);
 #else
-    pthread_rwlock_unlock(&t->rwlock);
+    netdata_rwlock_unlock(&t->rwlock);
 #endif
 #endif /* AVL_WITHOUT_PTHREADS */
 }
@@ -340,9 +352,9 @@ void avl_init_lock(avl_tree_lock *t, int (*compar)(void *a, void *b)) {
     int lock;
 
 #ifdef AVL_LOCK_WITH_MUTEX
-    lock = pthread_mutex_init(&t->mutex, NULL);
+    lock = netdata_mutex_init(&t->mutex, NULL);
 #else
-    lock = pthread_rwlock_init(&t->rwlock, NULL);
+    lock = netdata_rwlock_init(&t->rwlock);
 #endif
 
     if(lock != 0)
@@ -372,10 +384,12 @@ avl *avl_insert_lock(avl_tree_lock *t, avl *a) {
     return ret;
 }
 
-void avl_traverse_lock(avl_tree_lock *t, void (*callback)(void *entry, void *data), void *data) {
+int avl_traverse_lock(avl_tree_lock *t, int (*callback)(void *entry, void *data), void *data) {
+    int ret;
     avl_read_lock(t);
-    avl_traverse(&t->avl_tree, callback, data);
+    ret = avl_traverse(&t->avl_tree, callback, data);
     avl_unlock(t);
+    return ret;
 }
 
 void avl_init(avl_tree *t, int (*compar)(void *a, void *b)) {

@@ -100,13 +100,12 @@ class Service(SocketService):
         :return: dict
         """
         if self.passwd:
-            info_request = self.request
             self.request = "AUTH " + self.passwd + "\r\n"
             raw = self._get_raw_data().strip()
             if raw != "+OK":
                 self.error("invalid password")
                 return None
-            self.request = info_request
+            self.request = "INFO\r\n"
         response = self._get_raw_data()
         if response is None:
             # error has already been logged
@@ -155,7 +154,7 @@ class Service(SocketService):
         :return: boolean
         """
         length = len(data)
-        supposed = data.split('\n')[0][1:]
+        supposed = data.split('\n')[0][1:-1]
         offset = len(supposed) + 4  # 1 dollar sing, 1 new line character + 1 ending sequence '\r\n'
         if not supposed.isdigit():
             return True

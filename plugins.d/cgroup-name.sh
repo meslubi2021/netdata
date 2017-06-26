@@ -51,7 +51,7 @@ debug() {
 
 # -----------------------------------------------------------------------------
 
-NETDATA_CONFIG_DIR="${NETDATA_CONFIG_DIR-/etc/netdata}"
+[ -z "${NETDATA_CONFIG_DIR}" ] && NETDATA_CONFIG_DIR="$(dirname "${0}")/../../../../etc/netdata"
 CONFIG="${NETDATA_CONFIG_DIR}/cgroups-names.conf"
 CGROUP="${1}"
 NAME=
@@ -89,7 +89,7 @@ function get_name_api {
         return 1
     fi
     info "Running API command: /containers/${DOCKERID}/json"
-    JSON=$(echo -e "GET /containers/${DOCKERID}/json HTTP/1.0\r\n" | nc -U /var/run/docker.sock | egrep '^{.*')
+    JSON=$(echo -e "GET /containers/${DOCKERID}/json HTTP/1.0\r\n" | nc -U /var/run/docker.sock | grep '^{.*')
     NAME=$(echo $JSON | jq -r .Name,.Config.Hostname | grep -v null | head -n1 | sed 's|^/||')
     return 0
 }
@@ -98,6 +98,8 @@ if [ -z "${NAME}" ]
     then
     if [[ "${CGROUP}" =~ ^.*docker[-_/\.][a-fA-F0-9]+[-_\.]?.*$ ]]
         then
+        # docker containers
+
         DOCKERID="$( echo "${CGROUP}" | sed "s|^.*docker[-_/]\([a-fA-F0-9]\+\)[-_\.]\?.*$|\1|" )"
         # echo "DOCKERID=${DOCKERID}"
 
@@ -116,6 +118,33 @@ if [ -z "${NAME}" ]
             else
                 info "docker container '${DOCKERID}' is named '${NAME}'"
             fi
+        fi
+    elif [[ "${CGROUP}" =~ machine.slice_machine.*-qemu ]]
+        then
+        # libvirtd / qemu virtual machines
+
+        NAME="$(echo ${CGROUP} | sed 's/machine.slice_machine.*-qemu//; s/\/x2d//; s/\/x2d/\-/g; s/\.scope//g')"
+    elif [[ "${CGROUP}" =~ qemu.slice_([0-9]+).scope && -d /etc/pve ]]
+        then
+        
+	# Proxmox VMs
+	FILENAME="/etc/pve/qemu-server/${BASH_REMATCH[1]}.conf"
+	if [[ -f $FILENAME && -r $FILENAME ]]
+	    then
+            NAME=$(grep -e '^name: ' /etc/pve/qemu-server/${BASH_REMATCH[1]}.conf | head -1 | sed -rn 's|\s*name\s*:\s*(.*)?$|\1|p')
+	else	
+            error "proxmox config file missing $FILENAME or netdata does not have read access.  Please ensure netdata is a member of www-data group."
+	fi
+    elif [[ "${CGROUP}" =~ lxc_([0-9]+) && -d /etc/pve ]]
+        then
+
+        # Proxmox Container (LXC)
+	FILENAME="/etc/pve/lxc/${BASH_REMATCH[1]}.conf"
+	if [[ -f $FILENAME && -r $FILENAME ]]
+            then
+	    NAME=$(grep -e '^hostname: ' /etc/pve/lxc/${BASH_REMATCH[1]}.conf | head -1 | sed -rn 's|\s*hostname\s*:\s*(.*)?$|\1|p')
+	else
+            error "proxmox config file missing $FILENAME or netdata does not have read access.  Please ensure netdata is a member of www-data group."
         fi
     fi
 

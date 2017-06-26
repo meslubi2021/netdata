@@ -18,19 +18,37 @@
 # using ".encode()" in one thread can block other threads as well (only in python2)
 
 import time
-# import sys
 import os
 import socket
-import select
+import threading
+import ssl
+from subprocess import Popen, PIPE
+from sys import exc_info
+from glob import glob
+import re
+try:
+    from urlparse import urlparse
+except ImportError:
+    from urllib.parse import urlparse
 try:
     import urllib.request as urllib2
 except ImportError:
     import urllib2
-
-from subprocess import Popen, PIPE
-
-import threading
+try:
+    import MySQLdb
+    PYMYSQL = True
+except ImportError:
+    try:
+        import pymysql as MySQLdb
+        PYMYSQL = True
+    except ImportError:
+        PYMYSQL = False
 import msg
+
+try:
+    PATH = os.getenv('PATH').split(':')
+except AttributeError:
+    PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'.split(':')
 
 
 # class BaseService(threading.Thread):
@@ -61,6 +79,7 @@ class SimpleService(threading.Thread):
         self.__first_run = True
         self.order = []
         self.definitions = {}
+        self._data_from_check = dict()
         if configuration is None:
             self.error("BaseService: no configuration parameters supplied. Cannot create Service.")
             raise RuntimeError
@@ -154,14 +173,15 @@ class SimpleService(threading.Thread):
             # it is important to do this in a loop
             # sleep() is interruptable
             while now < next:
-                self.debug("sleeping for", str(next - now), "secs to reach frequency of", str(step), "secs, now:", str(now), " next:", str(next), " penalty:", str(penalty))
+                self.debug("sleeping for", str(next - now), "secs to reach frequency of",
+                           str(step), "secs, now:", str(now), " next:", str(next), " penalty:", str(penalty))
                 time.sleep(next - now)
                 now = float(time.time())
 
             # do the job
             try:
                 status = self._run_once()
-            except Exception as e:
+            except Exception:
                 status = False
 
             if status:
@@ -181,10 +201,12 @@ class SimpleService(threading.Thread):
                         penalty = 600
 
                     self.retries_left = self.retries
-                    self.alert("failed to collect data for " + str(self.retries) + " times - increasing penalty to " + str(penalty) + " sec and trying again")
+                    self.alert("failed to collect data for " + str(self.retries) +
+                               " times - increasing penalty to " + str(penalty) + " sec and trying again")
 
                 else:
-                    self.error("failed to collect data - " + str(self.retries_left) + " retries left - penalty: " + str(penalty) + " sec")
+                    self.error("failed to collect data - " + str(self.retries_left)
+                               + " retries left - penalty: " + str(penalty) + " sec")
 
     # --- CHART ---
 
@@ -385,7 +407,7 @@ class SimpleService(threading.Thread):
         Create charts
         :return: boolean
         """
-        data = self._get_data()
+        data = self._data_from_check or self._get_data()
         if data is None:
             self.debug("failed to receive data during create().")
             return False
@@ -431,101 +453,150 @@ class SimpleService(threading.Thread):
 
         return updated
 
+    @staticmethod
+    def find_binary(binary):
+        try:
+            if isinstance(binary, str):
+                binary = os.path.basename(binary)
+                return next(('/'.join([p, binary]) for p in PATH
+                            if os.path.isfile('/'.join([p, binary]))
+                            and os.access('/'.join([p, binary]), os.X_OK)))
+            return None
+        except StopIteration:
+            return None
+
+    def _add_new_dimension(self, dimension_id, chart_name, dimension=None, algorithm='incremental',
+                           multiplier=1, divisor=1, priority=65000):
+        """
+        :param dimension_id:
+        :param chart_name:
+        :param dimension:
+        :param algorithm:
+        :param multiplier:
+        :param divisor:
+        :param priority:
+        :return:
+        """
+        if not all([dimension_id not in self._dimensions,
+                    chart_name in self.order,
+                    chart_name in self.definitions]):
+            return
+        self._dimensions.append(dimension_id)
+        dimension_list = list(map(str, [dimension_id,
+                                        dimension if dimension else dimension_id,
+                                        algorithm,
+                                        multiplier,
+                                        divisor]))
+        self.definitions[chart_name]['lines'].append(dimension_list)
+        add_to_name = self.override_name or self.name
+        job_name = ('_'.join([self.__module__, re.sub('\s+', '_', add_to_name)])
+                    if add_to_name != 'None' else self.__module__)
+        chart = 'CHART {0}.{1} '.format(job_name, chart_name)
+        options = '"" "{0}" {1} "{2}" {3} {4} '.format(*self.definitions[chart_name]['options'][1:6])
+        other = '{0} {1}\n'.format(priority, self.update_every)
+        new_dimension = "DIMENSION {0}\n".format(' '.join(dimension_list))
+        print(chart + options + other + new_dimension)
+
 
 class UrlService(SimpleService):
-    # TODO add support for https connections
     def __init__(self, configuration=None, name=None):
-        self.url = ""
-        self.user = None
-        self.password = None
-        self.proxies = {}
         SimpleService.__init__(self, configuration=configuration, name=name)
+        self.url = self.configuration.get('url')
+        self.user = self.configuration.get('user')
+        self.password = self.configuration.get('pass')
+        self.ss_cert = self.configuration.get('ss_cert')
+        self.proxy = self.configuration.get('proxy')
 
-    def __add_openers(self):
-        # TODO add error handling
-        self.opener = urllib2.build_opener()
+    def __add_openers(self, user=None, password=None, ss_cert=None, proxy=None, url=None):
+        user = user or self.user
+        password = password or self.password
+        ss_cert = ss_cert or self.ss_cert
+        proxy = proxy or self.proxy
 
-        # Proxy handling
-        # TODO currently self.proxies isn't parsed from configuration file
-        # if len(self.proxies) > 0:
-        #     for proxy in self.proxies:
-        #         url = proxy['url']
-        #         # TODO test this:
-        #         if "user" in proxy and "pass" in proxy:
-        #             if url.lower().startswith('https://'):
-        #                 url = 'https://' + proxy['user'] + ':' + proxy['pass'] + '@' + url[8:]
-        #             else:
-        #                 url = 'http://' + proxy['user'] + ':' + proxy['pass'] + '@' + url[7:]
-        #         # FIXME move proxy auth to sth like this:
-        #         #     passman = urllib2.HTTPPasswordMgrWithDefaultRealm()
-        #         #     passman.add_password(None, url, proxy['user'], proxy['password'])
-        #         #     opener.add_handler(urllib2.HTTPBasicAuthHandler(passman))
-        #
-        #         if url.lower().startswith('https://'):
-        #             opener.add_handler(urllib2.ProxyHandler({'https': url}))
-        #         else:
-        #             opener.add_handler(urllib2.ProxyHandler({'https': url}))
+        handlers = list()
 
-        # HTTP Basic Auth
-        if self.user is not None and self.password is not None:
+        # HTTP Basic Auth handler
+        if all([user, password, isinstance(user, str), isinstance(password, str)]):
+            url = url or self.url
+            url_parse = urlparse(url)
+            top_level_url = '://'.join([url_parse.scheme, url_parse.netloc])
             passman = urllib2.HTTPPasswordMgrWithDefaultRealm()
-            passman.add_password(None, self.url, self.user, self.password)
-            self.opener.add_handler(urllib2.HTTPBasicAuthHandler(passman))
+            passman.add_password(None, top_level_url, user, password)
+            handlers.append(urllib2.HTTPBasicAuthHandler(passman))
             self.debug("Enabling HTTP basic auth")
 
-        #urllib2.install_opener(opener)
+        # HTTPS handler
+        # Self-signed certificate ignore
+        if ss_cert:
+            try:
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+            except AttributeError:
+                self.error('HTTPS self-signed certificate ignore not enabled')
+            else:
+                handlers.append(urllib2.HTTPSHandler(context=ctx))
+                self.debug("Enabling HTTP self-signed certificate ignore")
 
-    def _get_raw_data(self):
+        # PROXY handler
+        if proxy and isinstance(proxy, str) and not ss_cert:
+            handlers.append(urllib2.ProxyHandler(dict(http=proxy)))
+            self.debug("Enabling HTTP proxy handler (%s)" % proxy)
+
+        opener = urllib2.build_opener(*handlers)
+        return opener
+
+    def _build_opener(self, **kwargs):
+        try:
+            return self.__add_openers(**kwargs)
+        except TypeError as error:
+            self.error('build_opener() error:', str(error))
+            return None
+
+    def _get_raw_data(self, url=None, opener=None):
         """
         Get raw data from http request
         :return: str
         """
-        raw = None
+        data = None
         try:
-            f = self.opener.open(self.url, timeout=self.update_every * 2)
-            # f = urllib2.urlopen(self.url, timeout=self.update_every * 2)
-        except Exception as e:
-            self.error(str(e))
+            opener = opener or self.opener
+            data = opener.open(url or self.url, timeout=self.update_every * 2)
+            raw_data = data.read().decode('utf-8', 'ignore')
+        except urllib2.URLError as error:
+            self.error('Url: %s. Error: %s' % (url or self.url, str(error)))
             return None
-
-        try:
-            raw = f.read().decode('utf-8', 'ignore')
-        except Exception as e:
-            self.error(str(e))
+        except Exception as error:
+            self.error(str(error))
+            return None
         finally:
-            f.close()
-        return raw
+            if data is not None:
+                data.close()
+        return raw_data or None
 
     def check(self):
         """
         Format configuration data and try to connect to server
         :return: boolean
         """
-        if self.name is None or self.name == str(None):
-            self.name = 'local'
-            self.chart_name += "_" + self.name
-        else:
-            self.name = str(self.name)
-        try:
-            self.url = str(self.configuration['url'])
-        except (KeyError, TypeError):
-            pass
-        try:
-            self.user = str(self.configuration['user'])
-        except (KeyError, TypeError):
-            pass
-        try:
-            self.password = str(self.configuration['pass'])
-        except (KeyError, TypeError):
-            pass
-
-        self.__add_openers()
-
-        test = self._get_data()
-        if test is None or len(test) == 0:
+        if not (self.url and isinstance(self.url, str)):
+            self.error('URL is not defined or type is not <str>')
             return False
-        else:
+
+        self.opener = self.__add_openers()
+
+        try:
+            data = self._get_data()
+        except Exception as error:
+            self.error('_get_data() failed. Url: %s. Error: %s' % (self.url, error))
+            return False
+
+        if isinstance(data, dict) and data:
+            self._data_from_check = data
             return True
+        else:
+            self.error("_get_data() returned no data or type is not <dict>")
+            return False
 
 
 class SocketService(SimpleService):
@@ -768,57 +839,69 @@ class SocketService(SimpleService):
 
 class LogService(SimpleService):
     def __init__(self, configuration=None, name=None):
-        self.log_path = ""
-        self._last_position = 0
-        # self._log_reader = None
         SimpleService.__init__(self, configuration=configuration, name=name)
+        self.log_path = self.configuration.get('path')
+        self.__glob_path = self.log_path
+        self._last_position = 0
         self.retries = 100000  # basically always retry
+        self.__re_find = dict(current=0, run=0, maximum=60)
 
     def _get_raw_data(self):
         """
         Get log lines since last poll
         :return: list
         """
-        lines = []
+        lines = list()
         try:
-            if os.path.getsize(self.log_path) < self._last_position:
+            if self.__re_find['current'] == self.__re_find['run']:
+                self._find_recent_log_file()
+            size = os.path.getsize(self.log_path)
+            if size == self._last_position:
+                self.__re_find['current'] += 1
+                return list()  # return empty list if nothing has changed
+            elif size < self._last_position:
                 self._last_position = 0  # read from beginning if file has shrunk
-            elif os.path.getsize(self.log_path) == self._last_position:
-                self.debug("Log file hasn't changed. No new data.")
-                return []  # return empty list if nothing has changed
-            with open(self.log_path, "r") as fp:
+
+            with open(self.log_path) as fp:
                 fp.seek(self._last_position)
-                for i, line in enumerate(fp):
+                for line in fp:
                     lines.append(line)
                 self._last_position = fp.tell()
-        except Exception as e:
-            self.error(str(e))
+                self.__re_find['current'] = 0
+        except (OSError, IOError) as error:
+            self.__re_find['current'] += 1
+            self.error(str(error))
 
-        if len(lines) != 0:
-            return lines
-        else:
-            self.error("No data collected.")
-            return None
+        return lines or None
+
+    def _find_recent_log_file(self):
+        """
+        :return:
+        """
+        self.__re_find['run'] = self.__re_find['maximum']
+        self.__re_find['current'] = 0
+        self.__glob_path = self.__glob_path or self.log_path  # workaround for modules w/o config files
+        path_list = glob(self.__glob_path)
+        if path_list:
+            self.log_path = max(path_list)
+            return True
+        return False
 
     def check(self):
         """
         Parse basic configuration and check if log file exists
         :return: boolean
         """
-        if self.name is not None or self.name != str(None):
-            self.name = ""
-        else:
-            self.name = str(self.name)
-        try:
-            self.log_path = str(self.configuration['path'])
-        except (KeyError, TypeError):
-            self.info("No path to log specified. Using: '" + self.log_path + "'")
+        if not self.log_path:
+            self.error("No path to log specified")
+            return None
 
-        if os.access(self.log_path, os.R_OK):
+        if all([self._find_recent_log_file(),
+                os.access(self.log_path, os.R_OK),
+                os.path.isfile(self.log_path)]):
             return True
-        else:
-            self.error("Cannot access file: '" + self.log_path + "'")
-            return False
+        self.error("Cannot access %s" % self.log_path)
+        return False
 
     def create(self):
         # set cursor at last byte of log file
@@ -829,63 +912,213 @@ class LogService(SimpleService):
 
 
 class ExecutableService(SimpleService):
-    bad_substrings = ('&', '|', ';', '>', '<')
 
     def __init__(self, configuration=None, name=None):
-        self.command = ""
         SimpleService.__init__(self, configuration=configuration, name=name)
+        self.command = None
 
-    def _get_raw_data(self):
+    def _get_raw_data(self, stderr=False):
         """
         Get raw data from executed command
-        :return: str
+        :return: <list>
         """
         try:
             p = Popen(self.command, stdout=PIPE, stderr=PIPE)
-        except Exception as e:
-            self.error("Executing command", self.command, "resulted in error:", str(e))
+        except Exception as error:
+            self.error("Executing command", " ".join(self.command), "resulted in error:", str(error))
             return None
-        data = []
-        for line in p.stdout.readlines():
-            data.append(str(line.decode()))
+        data = list()
+        std = p.stderr if stderr else p.stdout
+        for line in std.readlines():
+            data.append(line.decode())
 
-        if len(data) == 0:
-            self.error("No data collected.")
-            return None
-
-        return data
+        return data or None
 
     def check(self):
         """
         Parse basic configuration, check if command is whitelisted and is returning values
-        :return: boolean
+        :return: <boolean>
         """
-        if self.name is not None or self.name != str(None):
-            self.name = ""
-        else:
-            self.name = str(self.name)
-        try:
-            self.command = str(self.configuration['command'])
-        except (KeyError, TypeError):
-            self.info("No command specified. Using: '" + self.command + "'")
-        command = self.command.split(' ')
+        # Preference: 1. "command" from configuration file 2. "command" from plugin (if specified)
+        if 'command' in self.configuration:
+            self.command = self.configuration['command']
 
-        for arg in command[1:]:
-            if any(st in arg for st in self.bad_substrings):
-                self.error("Bad command argument:" + " ".join(self.command[1:]))
-                return False
-
-        # test command and search for it in /usr/sbin or /sbin when failed
-        base = command[0].split('/')[-1]
-        if self._get_raw_data() is None:
-            for prefix in ['/sbin/', '/usr/sbin/']:
-                command[0] = prefix + base
-                if os.path.isfile(command[0]):
-                    break
-
-        self.command = command
-        if self._get_data() is None or len(self._get_data()) == 0:
-            self.error("Command", self.command, "returned no data")
+        # "command" must be: 1.not None 2. type <str>
+        if not (self.command and isinstance(self.command, str)):
+            self.error('Command is not defined or command type is not <str>')
             return False
 
-        return True
+        # Split "command" into: 1. command <str> 2. options <list>
+        command, opts = self.command.split()[0], self.command.split()[1:]
+
+        # Check for "bad" symbols in options. No pipes, redirects etc. TODO: what is missing?
+        bad_opts = set(''.join(opts)) & set(['&', '|', ';', '>', '<'])
+        if bad_opts:
+            self.error("Bad command argument(s): %s" % bad_opts)
+            return False
+
+        # Find absolute path ('echo' => '/bin/echo')
+        if '/' not in command:
+            command = self.find_binary(command)
+            if not command:
+                self.error('Can\'t locate "%s" binary in PATH(%s)' % (self.command, PATH))
+                return False
+        # Check if binary exist and executable
+        else:
+            if not (os.path.isfile(command) and os.access(command, os.X_OK)):
+                self.error('"%s" is not a file or not executable' % command)
+                return False
+
+        self.command = [command] + opts if opts else [command]
+
+        try:
+            data = self._get_data()
+        except Exception as error:
+            self.error('_get_data() failed. Command: %s. Error: %s' % (self.command, error))
+            return False
+
+        if isinstance(data, dict) and data:
+            # We need this for create() method. No reason to execute get_data() again if result is not empty dict()
+            self._data_from_check = data
+            return True
+        else:
+            self.error("Command", str(self.command), "returned no data")
+            return False
+
+
+class MySQLService(SimpleService):
+
+    def __init__(self, configuration=None, name=None):
+        SimpleService.__init__(self, configuration=configuration, name=name)
+        self.__connection = None
+        self.__conn_properties = dict()
+        self.extra_conn_properties = dict()
+        self.__queries = self.configuration.get('queries', dict())
+        self.queries = dict()
+
+    def __connect(self):
+        try:
+            connection = MySQLdb.connect(connect_timeout=self.update_every, **self.__conn_properties)
+        except (MySQLdb.MySQLError, TypeError, AttributeError) as error:
+            return None, str(error)
+        else:
+            return connection, None
+
+    def check(self):
+        def get_connection_properties(conf, extra_conf):
+            properties = dict()
+            if 'user' in conf and conf['user']:
+                properties['user'] = conf['user']
+            if 'pass' in conf and conf['pass']:
+                properties['passwd'] = conf['pass']
+            if 'socket' in conf and conf['socket']:
+                properties['unix_socket'] = conf['socket']
+            elif 'host' in conf and conf['host']:
+                properties['host'] = conf['host']
+                properties['port'] = int(conf.get('port', 3306))
+            elif 'my.cnf' in conf and conf['my.cnf']:
+                properties['read_default_file'] = conf['my.cnf']
+            if isinstance(extra_conf, dict) and extra_conf:
+                properties.update(extra_conf)
+
+            return properties or None
+
+        def is_valid_queries_dict(raw_queries, log_error):
+            """
+            :param raw_queries: dict:
+            :param log_error: function:
+            :return: dict or None
+
+            raw_queries is valid when: type <dict> and not empty after is_valid_query(for all queries)
+            """
+            def is_valid_query(query):
+                return all([isinstance(query, str),
+                            query.startswith(('SELECT', 'select', 'SHOW', 'show'))])
+
+            if hasattr(raw_queries, 'keys') and raw_queries:
+                valid_queries = dict([(n, q) for n, q in raw_queries.items() if is_valid_query(q)])
+                bad_queries = set(raw_queries) - set(valid_queries)
+
+                if bad_queries:
+                    log_error('Removed query(s): %s' % bad_queries)
+                return valid_queries
+            else:
+                log_error('Unsupported "queries" format. Must be not empty <dict>')
+                return None
+
+        if not PYMYSQL:
+            self.error('MySQLdb or PyMySQL module is needed to use mysql.chart.py plugin')
+            return False
+
+        # Preference: 1. "queries" from the configuration file 2. "queries" from the module
+        self.queries = self.__queries or self.queries
+        # Check if "self.queries" exist, not empty and all queries are in valid format
+        self.queries = is_valid_queries_dict(self.queries, self.error)
+        if not self.queries:
+            return None
+
+        # Get connection properties
+        self.__conn_properties = get_connection_properties(self.configuration, self.extra_conn_properties)
+        if not self.__conn_properties:
+            self.error('Connection properties are missing')
+            return False
+
+        # Create connection to the database
+        self.__connection, error = self.__connect()
+        if error:
+            self.error('Can\'t establish connection to MySQL: %s' % error)
+            return False
+
+        try:
+            data = self._get_data() 
+        except Exception as error:
+            self.error('_get_data() failed. Error: %s' % error)
+            return False
+
+        if isinstance(data, dict) and data:
+            # We need this for create() method
+            self._data_from_check = data
+            return True
+        else:
+            self.error("_get_data() returned no data or type is not <dict>")
+            return False
+    
+    def _get_raw_data(self, description=None):
+        """
+        Get raw data from MySQL server
+        :return: dict: fetchall() or (fetchall(), description)
+        """
+
+        if not self.__connection:
+            self.__connection, error = self.__connect()
+            if error:
+                return None
+
+        raw_data = dict()
+        queries = dict(self.queries)
+        try:
+            with self.__connection as cursor:
+                for name, query in queries.items():
+                    try:
+                        cursor.execute(query)
+                    except (MySQLdb.ProgrammingError, MySQLdb.OperationalError) as error:
+                        if self.__is_error_critical(err_class=exc_info()[0], err_text=str(error)):
+                            raise RuntimeError
+                        self.error('Removed query: %s[%s]. Error: %s'
+                                   % (name, query, error))
+                        self.queries.pop(name)
+                        continue
+                    else:
+                        raw_data[name] = (cursor.fetchall(), cursor.description) if description else cursor.fetchall()
+            self.__connection.commit()
+        except (MySQLdb.MySQLError, RuntimeError, TypeError, AttributeError):
+            self.__connection.close()
+            self.__connection = None
+            return None
+        else:
+            return raw_data or None
+
+    @staticmethod
+    def __is_error_critical(err_class, err_text):
+        return err_class == MySQLdb.OperationalError and all(['denied' not in err_text,
+                                                              'Unknown column' not in err_text])

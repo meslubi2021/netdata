@@ -5,6 +5,9 @@
 #include <config.h>
 #endif
 
+// ----------------------------------------------------------------------------
+// system include files for all netdata C programs
+
 /* select the memory allocator, based on autoconf findings */
 #if defined(ENABLE_JEMALLOC)
 
@@ -20,25 +23,32 @@
 
 #else /* !defined(ENABLE_JEMALLOC) && !defined(ENABLE_TCMALLOC) */
 
+#if !(defined(__FreeBSD__) || defined(__APPLE__))
 #include <malloc.h>
+#endif /* __FreeBSD__ || __APPLE__ */
 
 #endif
 
 #include <pthread.h>
 #include <errno.h>
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stddef.h>
-
 #include <ctype.h>
 #include <string.h>
 #include <strings.h>
-
 #include <arpa/inet.h>
-#include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <sys/ioctl.h>
+
+#ifdef HAVE_NETINET_IN_H
+#include <netinet/in.h>
+#endif
+
+#ifdef HAVE_RESOLV_H
+#include <resolv.h>
+#endif
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -47,12 +57,21 @@
 #include <pwd.h>
 #include <locale.h>
 
+#ifdef HAVE_NETDB_H
 #include <netdb.h>
+#endif
+
+#include <net/if.h>
+
 #include <poll.h>
 #include <signal.h>
 #include <syslog.h>
 #include <sys/mman.h>
+
+#ifdef HAVE_SYS_PRCTL_H
 #include <sys/prctl.h>
+#endif
+
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -64,6 +83,14 @@
 #include <time.h>
 #include <unistd.h>
 #include <uuid/uuid.h>
+
+// #1408
+#ifdef MAJOR_IN_MKDEV
+#include <sys/mkdev.h>
+#endif
+#ifdef MAJOR_IN_SYSMACROS
+#include <sys/sysmacros.h>
+#endif
 
 /*
 #include <mntent.h>
@@ -83,6 +110,13 @@
 #include <zlib.h>
 #endif
 
+#ifdef HAVE_CAPABILITY
+#include <sys/capability.h>
+#endif
+
+// ----------------------------------------------------------------------------
+// netdata common definitions
+
 #if (SIZEOF_VOID_P == 8)
 #define ENVIRONMENT64
 #elif (SIZEOF_VOID_P == 4)
@@ -95,8 +129,51 @@
 #define GCC_VERSION (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)
 #endif // __GNUC__
 
-#include "avl.h"
+#ifdef HAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL
+#define NEVERNULL __attribute__((returns_nonnull))
+#else
+#define NEVERNULL
+#endif
+
+#ifdef HAVE_FUNC_ATTRIBUTE_MALLOC
+#define MALLOCLIKE __attribute__((malloc))
+#else
+#define MALLOCLIKE
+#endif
+
+#ifdef HAVE_FUNC_ATTRIBUTE_FORMAT
+#define PRINTFLIKE(f, a) __attribute__ ((format(__printf__, f, a)))
+#else
+#define PRINTFLIKE(f, a)
+#endif
+
+#ifdef HAVE_FUNC_ATTRIBUTE_NORETURN
+#define NORETURN __attribute__ ((noreturn))
+#else
+#define NORETURN
+#endif
+
+#ifdef HAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT
+#define WARNUNUSED __attribute__ ((warn_unused_result))
+#else
+#define WARNUNUSED
+#endif
+
+#ifdef abs
+#undef abs
+#endif
+#define abs(x) ((x < 0)? -x : x)
+
+#define GUID_LEN 36
+
+// ----------------------------------------------------------------------------
+// netdata include files
+
+#include "clocks.h"
 #include "log.h"
+#include "locks.h"
+#include "simple_pattern.h"
+#include "avl.h"
 #include "global_statistics.h"
 #include "storage_number.h"
 #include "web_buffer.h"
@@ -111,50 +188,64 @@
 #include "plugin_checks.h"
 #include "plugin_idlejitter.h"
 #include "plugin_nfacct.h"
-#include "plugin_proc.h"
-#include "plugin_tc.h"
-#include "plugins_d.h"
 
+#if defined(__FreeBSD__)
+#include <pthread_np.h>
+#include "plugin_freebsd.h"
+#define NETDATA_OS_TYPE "freebsd"
+#elif defined(__APPLE__)
+#include "plugin_macos.h"
+#define NETDATA_OS_TYPE "macos"
+#else
+#include "plugin_proc.h"
+#include "plugin_proc_diskspace.h"
+#define NETDATA_OS_TYPE "linux"
+#endif /* __FreeBSD__, __APPLE__*/
+
+#include "statistical.h"
+#include "socket.h"
 #include "eval.h"
 #include "health.h"
-
 #include "rrd.h"
+#include "plugin_tc.h"
+#include "plugins_d.h"
+#include "statsd.h"
 #include "rrd2json.h"
-
+#include "rrd2json_api_old.h"
 #include "web_client.h"
 #include "web_server.h"
-
 #include "registry.h"
 #include "daemon.h"
 #include "main.h"
 #include "unit_test.h"
-
 #include "ipc.h"
 #include "backends.h"
+#include "inlined.h"
+#include "adaptive_resortable_list.h"
+#include "rrdpush.h"
+#include "web_api_v1.h"
+#include "web_api_old.h"
 
-#ifdef abs
-#undef abs
-#endif
-#define abs(x) ((x < 0)? -x : x)
-
-extern unsigned long long usec_dt(struct timeval *now, struct timeval *old);
-extern unsigned long long timeval_usec(struct timeval *tv);
-
-// #define usec_dt(now, last) (((((now)->tv_sec * 1000000ULL) + (now)->tv_usec) - (((last)->tv_sec * 1000000ULL) + (last)->tv_usec)))
+extern char *netdata_configured_hostname;
+extern char *netdata_configured_config_dir;
+extern char *netdata_configured_log_dir;
+extern char *netdata_configured_plugins_dir;
+extern char *netdata_configured_web_dir;
+extern char *netdata_configured_cache_dir;
+extern char *netdata_configured_varlib_dir;
+extern char *netdata_configured_home_dir;
+extern char *netdata_configured_host_prefix;
 
 extern void netdata_fix_chart_id(char *s);
 extern void netdata_fix_chart_name(char *s);
 
-extern uint32_t simple_hash(const char *name);
-extern uint32_t simple_uhash(const char *name);
-
 extern void strreverse(char* begin, char* end);
 extern char *mystrsep(char **ptr, char *s);
-extern char *trim(char *s);
+extern char *trim(char *s); // remove leading and trailing spaces; may return NULL
+extern char *trim_all(char *buffer); // like trim(), but also remove duplicate spaces inside the string; may return NULL
 
-extern char *strncpyz(char *dst, const char *src, size_t n);
 extern int  vsnprintfz(char *dst, size_t n, const char *fmt, va_list args);
-extern int  snprintfz(char *dst, size_t n, const char *fmt, ...) __attribute__ (( format (printf, 3, 4)));
+extern int  snprintfz(char *dst, size_t n, const char *fmt, ...) PRINTFLIKE(3, 4);
 
 // memory allocation functions that handle failures
 #ifdef NETDATA_LOG_ALLOCATIONS
@@ -170,25 +261,26 @@ extern void *mallocz_int(const char *file, const char *function, const unsigned 
 extern void *reallocz_int(const char *file, const char *function, const unsigned long line, void *ptr, size_t size);
 extern void freez_int(const char *file, const char *function, const unsigned long line, void *ptr);
 #else
-extern char *strdupz(const char *s);
-extern void *callocz(size_t nmemb, size_t size);
-extern void *mallocz(size_t size);
-extern void *reallocz(void *ptr, size_t size);
+extern char *strdupz(const char *s) MALLOCLIKE NEVERNULL;
+extern void *callocz(size_t nmemb, size_t size) MALLOCLIKE NEVERNULL;
+extern void *mallocz(size_t size) MALLOCLIKE NEVERNULL;
+extern void *reallocz(void *ptr, size_t size) MALLOCLIKE NEVERNULL;
 extern void freez(void *ptr);
 #endif
 
+extern void json_escape_string(char *dst, const char *src, size_t size);
+extern void json_fix_string(char *s);
+
 extern void *mymmap(const char *filename, size_t size, int flags, int ksm);
-extern int savememory(const char *filename, void *mem, size_t size);
+extern int memory_file_save(const char *filename, void *mem, size_t size);
 
 extern int fd_is_valid(int fd);
 
-extern char *global_host_prefix;
 extern int enable_ksm;
 
 extern pid_t gettid(void);
 
-extern unsigned long long time_usec(void);
-extern int sleep_usec(unsigned long long usec);
+extern int sleep_usec(usec_t usec);
 
 extern char *fgets_trim_len(char *buf, size_t buf_size, FILE *fp, size_t *len);
 
@@ -202,6 +294,12 @@ extern pid_t get_system_pid_max(void);
 extern unsigned int hz;
 extern void get_system_HZ(void);
 
+extern int recursively_delete_dir(const char *path, const char *reason);
+
+extern volatile sig_atomic_t netdata_exit;
+extern const char *os_type;
+
+extern const char *program_version;
 
 /* fix for alpine linux */
 #ifndef RUSAGE_THREAD
@@ -209,7 +307,5 @@ extern void get_system_HZ(void);
 #define RUSAGE_THREAD RUSAGE_CHILDREN
 #endif
 #endif
-
-extern int read_single_number_file(const char *filename, unsigned long long *result);
 
 #endif /* NETDATA_COMMON_H */

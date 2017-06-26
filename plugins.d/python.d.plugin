@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import threading
+from re import sub
 
 # -----------------------------------------------------------------------------
 # globals & environment setup
@@ -19,8 +20,11 @@ BASE_CONFIG = {'update_every': os.getenv('NETDATA_UPDATE_EVERY', 1),
                'retries': 10}
 
 MODULES_DIR = os.path.abspath(os.getenv('NETDATA_PLUGINS_DIR',
-                                        os.path.dirname(__file__)) + "/../python.d") + "/"
-CONFIG_DIR = os.getenv('NETDATA_CONFIG_DIR', "/etc/netdata/")
+                        os.path.dirname(__file__)) + "/../python.d") + "/"
+
+CONFIG_DIR = os.getenv('NETDATA_CONFIG_DIR',
+                       os.path.dirname(__file__) + "/../../../../etc/netdata")
+
 # directories should end with '/'
 if CONFIG_DIR[-1] != "/":
     CONFIG_DIR += "/"
@@ -66,6 +70,34 @@ try:
 except ImportError:
     msg.fatal('Cannot find yaml library')
 
+try:
+    from collections import OrderedDict
+    ORDERED = True
+    DICT = OrderedDict
+    msg.info('YAML output is ordered')
+except ImportError:
+    try:
+        from ordereddict import OrderedDict
+        ORDERED = True
+        DICT = OrderedDict
+        msg.info('YAML output is ordered')
+    except ImportError:
+        ORDERED = False
+        DICT = dict
+        msg.info('YAML output is unordered')
+if ORDERED:
+    def ordered_load(stream, Loader=yaml.Loader, object_pairs_hook=OrderedDict):
+        class OrderedLoader(Loader):
+            pass
+
+        def construct_mapping(loader, node):
+            loader.flatten_mapping(node)
+            return object_pairs_hook(loader.construct_pairs(node))
+        OrderedLoader.add_constructor(
+            yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+            construct_mapping)
+        return yaml.load(stream, OrderedLoader)
+
 
 class PythonCharts(object):
     """
@@ -76,12 +108,16 @@ class PythonCharts(object):
                  modules=None,
                  modules_path='../python.d/',
                  modules_configs='../conf.d/',
-                 modules_disabled=None):
+                 modules_disabled=None,
+                 modules_enabled=None,
+                 default_run=None):
         """
         :param modules: list
         :param modules_path: str
         :param modules_configs: str
         :param modules_disabled: list
+        :param modules_enabled: list
+        :param default_run: bool
         """
 
         if modules is None:
@@ -94,13 +130,13 @@ class PythonCharts(object):
         self.configs = modules_configs
 
         # load modules
-        loaded_modules = self._load_modules(modules_path, modules, modules_disabled)
+        loaded_modules = self._load_modules(modules_path, modules, modules_disabled, modules_enabled, default_run)
 
         # load configuration files
         configured_modules = self._load_configs(loaded_modules)
 
         # good economy and prosperity:
-        self.jobs = self._create_jobs(configured_modules)  # type: list
+        self.jobs = self._create_jobs(configured_modules)  # type <list>
 
         # enable timetable override like `python.d.plugin mysql debug 1`
         if DEBUG_FLAG and OVERRIDE_UPDATE_EVERY:
@@ -130,7 +166,7 @@ class PythonCharts(object):
             msg.error("Problem loading", name, str(e))
             return None
 
-    def _load_modules(self, path, modules, disabled):
+    def _load_modules(self, path, modules, disabled, enabled, default_run):
         """
         Load modules from 'modules' list or dynamically every file from 'path' (only .chart.py files)
         :param path: str
@@ -156,7 +192,10 @@ class PythonCharts(object):
                     msg.fatal('no modules found.')
         else:
             # scan directory specified in path and load all modules from there
-            names = os.listdir(path)
+            if default_run is False:
+                names = [module for module in os.listdir(path) if module[:-9] in enabled]
+            else:
+                names = os.listdir(path)
             for mod in names:
                 if mod.replace(MODULE_EXTENSION, "") in disabled:
                     msg.error(mod + ": disabled module ", mod.replace(MODULE_EXTENSION, ""))
@@ -234,7 +273,7 @@ class PythonCharts(object):
         # check if there are dict in config dict
         many_jobs = False
         for name in config:
-            if type(config[name]) is dict:
+            if isinstance(config[name], DICT):
                 many_jobs = True
                 break
 
@@ -271,7 +310,7 @@ class PythonCharts(object):
                               ("/" + str(name) if name is not None else "") +
                               ": cannot start job: '" +
                               str(e))
-                    return None
+                    continue
                 else:
                     # set chart_name (needed to plot run time graphs)
                     job.chart_name = module.__name__
@@ -340,9 +379,10 @@ class PythonCharts(object):
                     i += 1
                     try:
                         if job.override_name is not None:
-                            new_name = job.__module__ + '_' + job.override_name
+                            new_name = job.__module__ + '_' + sub(r'\s+', '_', job.override_name)
                             if new_name in overridden:
-                                msg.info("DROPPED:", job.name, ", job '" + job.override_name + "' is already served by another job.")
+                                msg.info("DROPPED:", job.name, ", job '" + job.override_name +
+                                         "' is already served by another job.")
                                 self._stop(job)
                                 i -= 1
                             else:
@@ -419,12 +459,15 @@ def read_config(path):
     """
     try:
         with open(path, 'r') as stream:
-            config = yaml.load(stream)
-    except (OSError, IOError):
-        msg.error(str(path), "is not a valid configuration file")
+            if ORDERED:
+                config = ordered_load(stream, yaml.SafeLoader)
+            else:
+                config = yaml.load(stream)
+    except (OSError, IOError) as error:
+        msg.error(str(path), 'reading error:', str(error))
         return None
-    except yaml.YAMLError as e:
-        msg.error(str(path), "is malformed:", e)
+    except yaml.YAMLError as error:
+        msg.error(str(path), "is malformed:", str(error))
         return None
     return config
 
@@ -451,7 +494,7 @@ def parse_cmdline(directory, *commands):
         elif cmd == "trace" or cmd == "all":
             TRACE_FLAG = True
         elif os.path.isfile(directory + cmd + ".chart.py") or os.path.isfile(directory + cmd):
-            #DEBUG_FLAG = True
+            # DEBUG_FLAG = True
             mods.append(cmd.replace(".chart.py", ""))
         else:
             try:
@@ -476,7 +519,9 @@ def run():
     global DEBUG_FLAG, TRACE_FLAG, BASE_CONFIG
 
     # read configuration file
-    disabled = []
+    disabled = ['nginx_log', 'gunicorn_log', 'apache_cache']
+    enabled = list()
+    default_run = True
     configfile = CONFIG_DIR + "python.d.conf"
     msg.PROGRAM = PROGRAM
     msg.info("reading configuration file:", configfile)
@@ -518,12 +563,17 @@ def run():
         except (KeyError, TypeError):
             pass
 
-        for k, v in conf.items():
-            if k in ("update_every", "debug", "enabled"):
-                continue
-            if v is False:
-                disabled.append(k)
+        default_run = True if ('default_run' not in conf or conf.get('default_run')) else False
 
+        for k, v in conf.items():
+            if k in ("update_every", "debug", "enabled", "default_run"):
+                continue
+            if default_run:
+                if v is False:
+                    disabled.append(k)
+            else:
+                if v is True:
+                    enabled.append(k)
     # parse passed command line arguments
     modules = parse_cmdline(MODULES_DIR, *sys.argv)
     msg.DEBUG_FLAG = DEBUG_FLAG
@@ -538,7 +588,7 @@ def run():
              ", ONLY_MODULES=" + str(modules))
 
     # run plugins
-    charts = PythonCharts(modules, MODULES_DIR, CONFIG_DIR + "python.d/", disabled)
+    charts = PythonCharts(modules, MODULES_DIR, CONFIG_DIR + "python.d/", disabled, enabled, default_run)
     charts.check()
     charts.create()
     charts.update()

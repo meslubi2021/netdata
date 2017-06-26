@@ -3,10 +3,10 @@
 #define RRD_TYPE_NET_STAT_NETFILTER     "netfilter"
 #define RRD_TYPE_NET_STAT_CONNTRACK     "conntrack"
 
-int do_proc_net_stat_conntrack(int update_every, unsigned long long dt) {
+int do_proc_net_stat_conntrack(int update_every, usec_t dt) {
     static procfile *ff = NULL;
     static int do_sockets = -1, do_new = -1, do_changes = -1, do_expect = -1, do_search = -1, do_errors = -1;
-    static unsigned long long get_max_every = 10 * 1000000ULL, usec_since_last_max = 0;
+    static usec_t get_max_every = 10 * USEC_PER_SEC, usec_since_last_max = 0;
     static int read_full = 1;
     static char *nf_conntrack_filename, *nf_conntrack_count_filename, *nf_conntrack_max_filename;
     static RRDVAR *rrdvar_max = NULL;
@@ -16,12 +16,12 @@ int do_proc_net_stat_conntrack(int update_every, unsigned long long dt) {
 
     if(unlikely(do_sockets == -1)) {
         char filename[FILENAME_MAX + 1];
-        snprintfz(filename, FILENAME_MAX, "%s%s", global_host_prefix, "/proc/net/stat/nf_conntrack");
+        snprintfz(filename, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/proc/net/stat/nf_conntrack");
         nf_conntrack_filename = config_get("plugin:proc:/proc/net/stat/nf_conntrack", "filename to monitor", filename);
 
-        snprintfz(filename, FILENAME_MAX, "%s%s", global_host_prefix, "/proc/sys/net/netfilter/nf_conntrack_max");
+        snprintfz(filename, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/proc/sys/net/netfilter/nf_conntrack_max");
         nf_conntrack_max_filename = config_get("plugin:proc:/proc/sys/net/netfilter/nf_conntrack_max", "filename to monitor", filename);
-        usec_since_last_max = get_max_every = config_get_number("plugin:proc:/proc/sys/net/netfilter/nf_conntrack_max", "read every seconds", 10) * 1000000ULL;
+        usec_since_last_max = get_max_every = config_get_number("plugin:proc:/proc/sys/net/netfilter/nf_conntrack_max", "read every seconds", 10) * USEC_PER_SEC;
 
         read_full = 1;
         ff = procfile_open(nf_conntrack_filename, " \t:", PROCFILE_FLAG_DEFAULT);
@@ -35,7 +35,7 @@ int do_proc_net_stat_conntrack(int update_every, unsigned long long dt) {
 
         do_sockets = 1;
         if(!read_full) {
-            snprintfz(filename, FILENAME_MAX, "%s%s", global_host_prefix, "/proc/sys/net/netfilter/nf_conntrack_count");
+            snprintfz(filename, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/proc/sys/net/netfilter/nf_conntrack_count");
             nf_conntrack_count_filename = config_get("plugin:proc:/proc/sys/net/netfilter/nf_conntrack_count", "filename to monitor", filename);
 
             if(read_single_number_file(nf_conntrack_count_filename, &aentries))
@@ -47,7 +47,7 @@ int do_proc_net_stat_conntrack(int update_every, unsigned long long dt) {
         if(!do_sockets && !read_full)
             return 1;
 
-        rrdvar_max = rrdvar_custom_host_variable_create(&localhost, "netfilter.conntrack.max");
+        rrdvar_max = rrdvar_custom_host_variable_create(localhost, "netfilter.conntrack.max");
     }
 
     if(likely(read_full)) {
@@ -61,12 +61,12 @@ int do_proc_net_stat_conntrack(int update_every, unsigned long long dt) {
         if(unlikely(!ff))
             return 0; // we return 0, so that we will retry to open it next time
 
-        uint32_t lines = procfile_lines(ff), l;
+        size_t lines = procfile_lines(ff), l;
 
         for(l = 1; l < lines ;l++) {
-            uint32_t words = procfile_linewords(ff, l);
+            size_t words = procfile_linewords(ff, l);
             if(unlikely(words < 17)) {
-                if(unlikely(words)) error("Cannot read /proc/net/stat/nf_conntrack line. Expected 17 params, read %u.", words);
+                if(unlikely(words)) error("Cannot read /proc/net/stat/nf_conntrack line. Expected 17 params, read %zu.", words);
                 continue;
             }
 
@@ -130,11 +130,13 @@ int do_proc_net_stat_conntrack(int update_every, unsigned long long dt) {
     // --------------------------------------------------------------------
 
     if(do_sockets) {
-        st = rrdset_find(RRD_TYPE_NET_STAT_NETFILTER "." RRD_TYPE_NET_STAT_CONNTRACK "_sockets");
+        st = rrdset_find_localhost(RRD_TYPE_NET_STAT_NETFILTER "." RRD_TYPE_NET_STAT_CONNTRACK "_sockets");
         if(unlikely(!st)) {
-            st = rrdset_create(RRD_TYPE_NET_STAT_NETFILTER, RRD_TYPE_NET_STAT_CONNTRACK "_sockets", NULL, RRD_TYPE_NET_STAT_CONNTRACK, NULL, "Connection Tracker Connections", "active connections", 3000, update_every, RRDSET_TYPE_LINE);
+            st = rrdset_create_localhost(RRD_TYPE_NET_STAT_NETFILTER, RRD_TYPE_NET_STAT_CONNTRACK "_sockets", NULL
+                                         , RRD_TYPE_NET_STAT_CONNTRACK, NULL, "Connection Tracker Connections"
+                                         , "active connections", 3000, update_every, RRDSET_TYPE_LINE);
 
-            rrddim_add(st, "connections", NULL, 1, 1, RRDDIM_ABSOLUTE);
+            rrddim_add(st, "connections", NULL, 1, 1, RRD_ALGORITHM_ABSOLUTE);
         }
         else rrdset_next(st);
 
@@ -145,13 +147,15 @@ int do_proc_net_stat_conntrack(int update_every, unsigned long long dt) {
     // --------------------------------------------------------------------
 
     if(do_new) {
-        st = rrdset_find(RRD_TYPE_NET_STAT_NETFILTER "." RRD_TYPE_NET_STAT_CONNTRACK "_new");
+        st = rrdset_find_localhost(RRD_TYPE_NET_STAT_NETFILTER "." RRD_TYPE_NET_STAT_CONNTRACK "_new");
         if(unlikely(!st)) {
-            st = rrdset_create(RRD_TYPE_NET_STAT_NETFILTER, RRD_TYPE_NET_STAT_CONNTRACK "_new", NULL, RRD_TYPE_NET_STAT_CONNTRACK, NULL, "Connection Tracker New Connections", "connections/s", 3001, update_every, RRDSET_TYPE_LINE);
+            st = rrdset_create_localhost(RRD_TYPE_NET_STAT_NETFILTER, RRD_TYPE_NET_STAT_CONNTRACK "_new", NULL
+                                         , RRD_TYPE_NET_STAT_CONNTRACK, NULL, "Connection Tracker New Connections"
+                                         , "connections/s", 3001, update_every, RRDSET_TYPE_LINE);
 
-            rrddim_add(st, "new", NULL, 1, 1, RRDDIM_INCREMENTAL);
-            rrddim_add(st, "ignore", NULL, -1, 1, RRDDIM_INCREMENTAL);
-            rrddim_add(st, "invalid", NULL, -1, 1, RRDDIM_INCREMENTAL);
+            rrddim_add(st, "new", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st, "ignore", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st, "invalid", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
         }
         else rrdset_next(st);
 
@@ -164,14 +168,16 @@ int do_proc_net_stat_conntrack(int update_every, unsigned long long dt) {
     // --------------------------------------------------------------------
 
     if(do_changes) {
-        st = rrdset_find(RRD_TYPE_NET_STAT_NETFILTER "." RRD_TYPE_NET_STAT_CONNTRACK "_changes");
+        st = rrdset_find_localhost(RRD_TYPE_NET_STAT_NETFILTER "." RRD_TYPE_NET_STAT_CONNTRACK "_changes");
         if(unlikely(!st)) {
-            st = rrdset_create(RRD_TYPE_NET_STAT_NETFILTER, RRD_TYPE_NET_STAT_CONNTRACK "_changes", NULL, RRD_TYPE_NET_STAT_CONNTRACK, NULL, "Connection Tracker Changes", "changes/s", 3002, update_every, RRDSET_TYPE_LINE);
-            st->isdetail = 1;
+            st = rrdset_create_localhost(RRD_TYPE_NET_STAT_NETFILTER, RRD_TYPE_NET_STAT_CONNTRACK "_changes", NULL
+                                         , RRD_TYPE_NET_STAT_CONNTRACK, NULL, "Connection Tracker Changes", "changes/s"
+                                         , 3002, update_every, RRDSET_TYPE_LINE);
+            rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
-            rrddim_add(st, "inserted", NULL, 1, 1, RRDDIM_INCREMENTAL);
-            rrddim_add(st, "deleted", NULL, -1, 1, RRDDIM_INCREMENTAL);
-            rrddim_add(st, "delete_list", NULL, -1, 1, RRDDIM_INCREMENTAL);
+            rrddim_add(st, "inserted", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st, "deleted", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st, "delete_list", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
         }
         else rrdset_next(st);
 
@@ -184,14 +190,16 @@ int do_proc_net_stat_conntrack(int update_every, unsigned long long dt) {
     // --------------------------------------------------------------------
 
     if(do_expect) {
-        st = rrdset_find(RRD_TYPE_NET_STAT_NETFILTER "." RRD_TYPE_NET_STAT_CONNTRACK "_expect");
+        st = rrdset_find_localhost(RRD_TYPE_NET_STAT_NETFILTER "." RRD_TYPE_NET_STAT_CONNTRACK "_expect");
         if(unlikely(!st)) {
-            st = rrdset_create(RRD_TYPE_NET_STAT_NETFILTER, RRD_TYPE_NET_STAT_CONNTRACK "_expect", NULL, RRD_TYPE_NET_STAT_CONNTRACK, NULL, "Connection Tracker Expectations", "expectations/s", 3003, update_every, RRDSET_TYPE_LINE);
-            st->isdetail = 1;
+            st = rrdset_create_localhost(RRD_TYPE_NET_STAT_NETFILTER, RRD_TYPE_NET_STAT_CONNTRACK "_expect", NULL
+                                         , RRD_TYPE_NET_STAT_CONNTRACK, NULL, "Connection Tracker Expectations"
+                                         , "expectations/s", 3003, update_every, RRDSET_TYPE_LINE);
+            rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
-            rrddim_add(st, "created", NULL, 1, 1, RRDDIM_INCREMENTAL);
-            rrddim_add(st, "deleted", NULL, -1, 1, RRDDIM_INCREMENTAL);
-            rrddim_add(st, "new", NULL, 1, 1, RRDDIM_INCREMENTAL);
+            rrddim_add(st, "created", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st, "deleted", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st, "new", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
         }
         else rrdset_next(st);
 
@@ -204,14 +212,16 @@ int do_proc_net_stat_conntrack(int update_every, unsigned long long dt) {
     // --------------------------------------------------------------------
 
     if(do_search) {
-        st = rrdset_find(RRD_TYPE_NET_STAT_NETFILTER "." RRD_TYPE_NET_STAT_CONNTRACK "_search");
+        st = rrdset_find_localhost(RRD_TYPE_NET_STAT_NETFILTER "." RRD_TYPE_NET_STAT_CONNTRACK "_search");
         if(unlikely(!st)) {
-            st = rrdset_create(RRD_TYPE_NET_STAT_NETFILTER, RRD_TYPE_NET_STAT_CONNTRACK "_search", NULL, RRD_TYPE_NET_STAT_CONNTRACK, NULL, "Connection Tracker Searches", "searches/s", 3010, update_every, RRDSET_TYPE_LINE);
-            st->isdetail = 1;
+            st = rrdset_create_localhost(RRD_TYPE_NET_STAT_NETFILTER, RRD_TYPE_NET_STAT_CONNTRACK "_search", NULL
+                                         , RRD_TYPE_NET_STAT_CONNTRACK, NULL, "Connection Tracker Searches"
+                                         , "searches/s", 3010, update_every, RRDSET_TYPE_LINE);
+            rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
-            rrddim_add(st, "searched", NULL, 1, 1, RRDDIM_INCREMENTAL);
-            rrddim_add(st, "restarted", NULL, -1, 1, RRDDIM_INCREMENTAL);
-            rrddim_add(st, "found", NULL, 1, 1, RRDDIM_INCREMENTAL);
+            rrddim_add(st, "searched", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st, "restarted", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st, "found", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
         }
         else rrdset_next(st);
 
@@ -224,15 +234,17 @@ int do_proc_net_stat_conntrack(int update_every, unsigned long long dt) {
     // --------------------------------------------------------------------
 
     if(do_errors) {
-        st = rrdset_find(RRD_TYPE_NET_STAT_NETFILTER "." RRD_TYPE_NET_STAT_CONNTRACK "_errors");
+        st = rrdset_find_localhost(RRD_TYPE_NET_STAT_NETFILTER "." RRD_TYPE_NET_STAT_CONNTRACK "_errors");
         if(unlikely(!st)) {
-            st = rrdset_create(RRD_TYPE_NET_STAT_NETFILTER, RRD_TYPE_NET_STAT_CONNTRACK "_errors", NULL, RRD_TYPE_NET_STAT_CONNTRACK, NULL, "Connection Tracker Errors", "events/s", 3005, update_every, RRDSET_TYPE_LINE);
-            st->isdetail = 1;
+            st = rrdset_create_localhost(RRD_TYPE_NET_STAT_NETFILTER, RRD_TYPE_NET_STAT_CONNTRACK "_errors", NULL
+                                         , RRD_TYPE_NET_STAT_CONNTRACK, NULL, "Connection Tracker Errors", "events/s"
+                                         , 3005, update_every, RRDSET_TYPE_LINE);
+            rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
-            rrddim_add(st, "icmp_error", NULL, 1, 1, RRDDIM_INCREMENTAL);
-            rrddim_add(st, "insert_failed", NULL, -1, 1, RRDDIM_INCREMENTAL);
-            rrddim_add(st, "drop", NULL, -1, 1, RRDDIM_INCREMENTAL);
-            rrddim_add(st, "early_drop", NULL, -1, 1, RRDDIM_INCREMENTAL);
+            rrddim_add(st, "icmp_error", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st, "insert_failed", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st, "drop", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st, "early_drop", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
         }
         else rrdset_next(st);
 

@@ -113,6 +113,8 @@ void buffer_print_llu(BUFFER *wb, unsigned long long uvalue)
 
 void buffer_strcat(BUFFER *wb, const char *txt)
 {
+    // buffer_sprintf(wb, "%s", txt);
+
     if(unlikely(!txt || !*txt)) return;
 
     buffer_need_bytes(wb, 1);
@@ -143,6 +145,26 @@ void buffer_strcat(BUFFER *wb, const char *txt)
     }
 }
 
+void buffer_strcat_htmlescape(BUFFER *wb, const char *txt)
+{
+    char b[2] = { [0] = '\0', [1] = '\0' };
+
+    while(*txt) {
+        switch(*txt) {
+            case '&': buffer_strcat(wb, "&amp;"); break;
+            case '<': buffer_strcat(wb, "&lt;"); break;
+            case '>': buffer_strcat(wb, "&gt;"); break;
+            case '"': buffer_strcat(wb, "&quot;"); break;
+            case '/': buffer_strcat(wb, "&#x2F;"); break;
+            case '\'': buffer_strcat(wb, "&#x27;"); break;
+            default: {
+                b[0] = *txt;
+                buffer_strcat(wb, b);
+            }
+        }
+        txt++;
+    }
+}
 
 void buffer_snprintf(BUFFER *wb, size_t len, const char *fmt, ...)
 {
@@ -337,8 +359,9 @@ BUFFER *buffer_create(size_t size)
     return(b);
 }
 
-void buffer_free(BUFFER *b)
-{
+void buffer_free(BUFFER *b) {
+    if(unlikely(!b)) return;
+
     buffer_overflow_check(b);
 
     debug(D_WEB_BUFFER, "Freeing web buffer of size %zu.", b->size);

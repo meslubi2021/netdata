@@ -39,6 +39,7 @@ typedef struct web_buffer {
 #define CT_IMAGE_XICON                  19
 #define CT_IMAGE_ICNS                   20
 #define CT_IMAGE_BMP                    21
+#define CT_PROMETHEUS                   22
 
 #define buffer_cacheable(wb)    do { (wb)->options |= WB_CONTENT_CACHEABLE;    if((wb)->options & WB_CONTENT_NO_CACHEABLE) (wb)->options &= ~WB_CONTENT_NO_CACHEABLE; } while(0)
 #define buffer_no_cacheable(wb) do { (wb)->options |= WB_CONTENT_NO_CACHEABLE; if((wb)->options & WB_CONTENT_CACHEABLE)    (wb)->options &= ~WB_CONTENT_CACHEABLE;  (wb)->expires = 0; } while(0)
@@ -61,9 +62,10 @@ extern BUFFER *buffer_create(size_t size);
 extern void buffer_free(BUFFER *b);
 extern void buffer_increase(BUFFER *b, size_t free_size_required);
 
-extern void buffer_snprintf(BUFFER *wb, size_t len, const char *fmt, ...) __attribute__ (( format (printf, 3, 4)));
+extern void buffer_snprintf(BUFFER *wb, size_t len, const char *fmt, ...) PRINTFLIKE(3, 4);
 extern void buffer_vsprintf(BUFFER *wb, const char *fmt, va_list args);
-extern void buffer_sprintf(BUFFER *wb, const char *fmt, ...) __attribute__ (( format (printf, 2, 3)));
+extern void buffer_sprintf(BUFFER *wb, const char *fmt, ...) PRINTFLIKE(2,3);
+extern void buffer_strcat_htmlescape(BUFFER *wb, const char *txt);
 
 extern void buffer_char_replace(BUFFER *wb, char from, char to);
 

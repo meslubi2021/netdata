@@ -1,206 +1,68 @@
 #include "common.h"
 
-int do_proc_vmstat(int update_every, unsigned long long dt) {
+int do_proc_vmstat(int update_every, usec_t dt) {
     (void)dt;
 
     static procfile *ff = NULL;
-    static int do_swapio = -1, do_io = -1, do_pgfaults = -1;
+    static int do_swapio = -1, do_io = -1, do_pgfaults = -1, do_numa = -1;
+    static int has_numa = -1;
 
-    // static uint32_t hash_allocstall = 0;
-    // static uint32_t hash_compact_blocks_moved = 0;
-    // static uint32_t hash_compact_fail = 0;
-    // static uint32_t hash_compact_pagemigrate_failed = 0;
-    // static uint32_t hash_compact_pages_moved = 0;
-    // static uint32_t hash_compact_stall = 0;
-    // static uint32_t hash_compact_success = 0;
-    // static uint32_t hash_htlb_buddy_alloc_fail = 0;
-    // static uint32_t hash_htlb_buddy_alloc_success = 0;
-    // static uint32_t hash_kswapd_high_wmark_hit_quickly = 0;
-    // static uint32_t hash_kswapd_inodesteal = 0;
-    // static uint32_t hash_kswapd_low_wmark_hit_quickly = 0;
-    // static uint32_t hash_kswapd_skip_congestion_wait = 0;
-    // static uint32_t hash_nr_active_anon = 0;
-    // static uint32_t hash_nr_active_file = 0;
-    // static uint32_t hash_nr_anon_pages = 0;
-    // static uint32_t hash_nr_anon_transparent_hugepages = 0;
-    // static uint32_t hash_nr_bounce = 0;
-    // static uint32_t hash_nr_dirtied = 0;
-    // static uint32_t hash_nr_dirty = 0;
-    // static uint32_t hash_nr_dirty_background_threshold = 0;
-    // static uint32_t hash_nr_dirty_threshold = 0;
-    // static uint32_t hash_nr_file_pages = 0;
-    // static uint32_t hash_nr_free_pages = 0;
-    // static uint32_t hash_nr_inactive_anon = 0;
-    // static uint32_t hash_nr_inactive_file = 0;
-    // static uint32_t hash_nr_isolated_anon = 0;
-    // static uint32_t hash_nr_isolated_file = 0;
-    // static uint32_t hash_nr_kernel_stack = 0;
-    // static uint32_t hash_nr_mapped = 0;
-    // static uint32_t hash_nr_mlock = 0;
-    // static uint32_t hash_nr_page_table_pages = 0;
-    // static uint32_t hash_nr_shmem = 0;
-    // static uint32_t hash_nr_slab_reclaimable = 0;
-    // static uint32_t hash_nr_slab_unreclaimable = 0;
-    // static uint32_t hash_nr_unevictable = 0;
-    // static uint32_t hash_nr_unstable = 0;
-    // static uint32_t hash_nr_vmscan_immediate_reclaim = 0;
-    // static uint32_t hash_nr_vmscan_write = 0;
-    // static uint32_t hash_nr_writeback = 0;
-    // static uint32_t hash_nr_writeback_temp = 0;
-    // static uint32_t hash_nr_written = 0;
-    // static uint32_t hash_pageoutrun = 0;
-    // static uint32_t hash_pgactivate = 0;
-    // static uint32_t hash_pgalloc_dma = 0;
-    // static uint32_t hash_pgalloc_dma32 = 0;
-    // static uint32_t hash_pgalloc_movable = 0;
-    // static uint32_t hash_pgalloc_normal = 0;
-    // static uint32_t hash_pgdeactivate = 0;
-    static uint32_t hash_pgfault = 0;
-    // static uint32_t hash_pgfree = 0;
-    // static uint32_t hash_pginodesteal = 0;
-    static uint32_t hash_pgmajfault = 0;
-    static uint32_t hash_pgpgin = 0;
-    static uint32_t hash_pgpgout = 0;
-    // static uint32_t hash_pgrefill_dma = 0;
-    // static uint32_t hash_pgrefill_dma32 = 0;
-    // static uint32_t hash_pgrefill_movable = 0;
-    // static uint32_t hash_pgrefill_normal = 0;
-    // static uint32_t hash_pgrotated = 0;
-    // static uint32_t hash_pgscan_direct_dma = 0;
-    // static uint32_t hash_pgscan_direct_dma32 = 0;
-    // static uint32_t hash_pgscan_direct_movable = 0;
-    // static uint32_t hash_pgscan_direct_normal = 0;
-    // static uint32_t hash_pgscan_kswapd_dma = 0;
-    // static uint32_t hash_pgscan_kswapd_dma32 = 0;
-    // static uint32_t hash_pgscan_kswapd_movable = 0;
-    // static uint32_t hash_pgscan_kswapd_normal = 0;
-    // static uint32_t hash_pgsteal_direct_dma = 0;
-    // static uint32_t hash_pgsteal_direct_dma32 = 0;
-    // static uint32_t hash_pgsteal_direct_movable = 0;
-    // static uint32_t hash_pgsteal_direct_normal = 0;
-    // static uint32_t hash_pgsteal_kswapd_dma = 0;
-    // static uint32_t hash_pgsteal_kswapd_dma32 = 0;
-    // static uint32_t hash_pgsteal_kswapd_movable = 0;
-    // static uint32_t hash_pgsteal_kswapd_normal = 0;
-    static uint32_t hash_pswpin = 0;
-    static uint32_t hash_pswpout = 0;
-    // static uint32_t hash_slabs_scanned = 0;
-    // static uint32_t hash_thp_collapse_alloc = 0;
-    // static uint32_t hash_thp_collapse_alloc_failed = 0;
-    // static uint32_t hash_thp_fault_alloc = 0;
-    // static uint32_t hash_thp_fault_fallback = 0;
-    // static uint32_t hash_thp_split = 0;
-    // static uint32_t hash_unevictable_pgs_cleared = 0;
-    // static uint32_t hash_unevictable_pgs_culled = 0;
-    // static uint32_t hash_unevictable_pgs_mlocked = 0;
-    // static uint32_t hash_unevictable_pgs_mlockfreed = 0;
-    // static uint32_t hash_unevictable_pgs_munlocked = 0;
-    // static uint32_t hash_unevictable_pgs_rescued = 0;
-    // static uint32_t hash_unevictable_pgs_scanned = 0;
-    // static uint32_t hash_unevictable_pgs_stranded = 0;
+    static ARL_BASE *arl_base = NULL;
+    static unsigned long long numa_foreign = 0ULL;
+    static unsigned long long numa_hint_faults = 0ULL;
+    static unsigned long long numa_hint_faults_local = 0ULL;
+    static unsigned long long numa_huge_pte_updates = 0ULL;
+    static unsigned long long numa_interleave = 0ULL;
+    static unsigned long long numa_local = 0ULL;
+    static unsigned long long numa_other = 0ULL;
+    static unsigned long long numa_pages_migrated = 0ULL;
+    static unsigned long long numa_pte_updates = 0ULL;
+    static unsigned long long pgfault = 0ULL;
+    static unsigned long long pgmajfault = 0ULL;
+    static unsigned long long pgpgin = 0ULL;
+    static unsigned long long pgpgout = 0ULL;
+    static unsigned long long pswpin = 0ULL;
+    static unsigned long long pswpout = 0ULL;
 
-    if(unlikely(do_swapio == -1)) {
-        do_swapio = config_get_boolean_ondemand("plugin:proc:/proc/vmstat", "swap i/o", CONFIG_ONDEMAND_ONDEMAND);
+    if(unlikely(!arl_base)) {
+        do_swapio = config_get_boolean_ondemand("plugin:proc:/proc/vmstat", "swap i/o", CONFIG_BOOLEAN_AUTO);
         do_io = config_get_boolean("plugin:proc:/proc/vmstat", "disk i/o", 1);
         do_pgfaults = config_get_boolean("plugin:proc:/proc/vmstat", "memory page faults", 1);
+        do_numa = config_get_boolean_ondemand("plugin:proc:/proc/vmstat", "system-wide numa metric summary", CONFIG_BOOLEAN_AUTO);
 
-        // hash_allocstall = simple_hash("allocstall");
-        // hash_compact_blocks_moved = simple_hash("compact_blocks_moved");
-        // hash_compact_fail = simple_hash("compact_fail");
-        // hash_compact_pagemigrate_failed = simple_hash("compact_pagemigrate_failed");
-        // hash_compact_pages_moved = simple_hash("compact_pages_moved");
-        // hash_compact_stall = simple_hash("compact_stall");
-        // hash_compact_success = simple_hash("compact_success");
-        // hash_htlb_buddy_alloc_fail = simple_hash("htlb_buddy_alloc_fail");
-        // hash_htlb_buddy_alloc_success = simple_hash("htlb_buddy_alloc_success");
-        // hash_kswapd_high_wmark_hit_quickly = simple_hash("kswapd_high_wmark_hit_quickly");
-        // hash_kswapd_inodesteal = simple_hash("kswapd_inodesteal");
-        // hash_kswapd_low_wmark_hit_quickly = simple_hash("kswapd_low_wmark_hit_quickly");
-        // hash_kswapd_skip_congestion_wait = simple_hash("kswapd_skip_congestion_wait");
-        // hash_nr_active_anon = simple_hash("nr_active_anon");
-        // hash_nr_active_file = simple_hash("nr_active_file");
-        // hash_nr_anon_pages = simple_hash("nr_anon_pages");
-        // hash_nr_anon_transparent_hugepages = simple_hash("nr_anon_transparent_hugepages");
-        // hash_nr_bounce = simple_hash("nr_bounce");
-        // hash_nr_dirtied = simple_hash("nr_dirtied");
-        // hash_nr_dirty = simple_hash("nr_dirty");
-        // hash_nr_dirty_background_threshold = simple_hash("nr_dirty_background_threshold");
-        // hash_nr_dirty_threshold = simple_hash("nr_dirty_threshold");
-        // hash_nr_file_pages = simple_hash("nr_file_pages");
-        // hash_nr_free_pages = simple_hash("nr_free_pages");
-        // hash_nr_inactive_anon = simple_hash("nr_inactive_anon");
-        // hash_nr_inactive_file = simple_hash("nr_inactive_file");
-        // hash_nr_isolated_anon = simple_hash("nr_isolated_anon");
-        // hash_nr_isolated_file = simple_hash("nr_isolated_file");
-        // hash_nr_kernel_stack = simple_hash("nr_kernel_stack");
-        // hash_nr_mapped = simple_hash("nr_mapped");
-        // hash_nr_mlock = simple_hash("nr_mlock");
-        // hash_nr_page_table_pages = simple_hash("nr_page_table_pages");
-        // hash_nr_shmem = simple_hash("nr_shmem");
-        // hash_nr_slab_reclaimable = simple_hash("nr_slab_reclaimable");
-        // hash_nr_slab_unreclaimable = simple_hash("nr_slab_unreclaimable");
-        // hash_nr_unevictable = simple_hash("nr_unevictable");
-        // hash_nr_unstable = simple_hash("nr_unstable");
-        // hash_nr_vmscan_immediate_reclaim = simple_hash("nr_vmscan_immediate_reclaim");
-        // hash_nr_vmscan_write = simple_hash("nr_vmscan_write");
-        // hash_nr_writeback = simple_hash("nr_writeback");
-        // hash_nr_writeback_temp = simple_hash("nr_writeback_temp");
-        // hash_nr_written = simple_hash("nr_written");
-        // hash_pageoutrun = simple_hash("pageoutrun");
-        // hash_pgactivate = simple_hash("pgactivate");
-        // hash_pgalloc_dma = simple_hash("pgalloc_dma");
-        // hash_pgalloc_dma32 = simple_hash("pgalloc_dma32");
-        // hash_pgalloc_movable = simple_hash("pgalloc_movable");
-        // hash_pgalloc_normal = simple_hash("pgalloc_normal");
-        // hash_pgdeactivate = simple_hash("pgdeactivate");
-        hash_pgfault = simple_hash("pgfault");
-        // hash_pgfree = simple_hash("pgfree");
-        // hash_pginodesteal = simple_hash("pginodesteal");
-        hash_pgmajfault = simple_hash("pgmajfault");
-        hash_pgpgin = simple_hash("pgpgin");
-        hash_pgpgout = simple_hash("pgpgout");
-        // hash_pgrefill_dma = simple_hash("pgrefill_dma");
-        // hash_pgrefill_dma32 = simple_hash("pgrefill_dma32");
-        // hash_pgrefill_movable = simple_hash("pgrefill_movable");
-        // hash_pgrefill_normal = simple_hash("pgrefill_normal");
-        // hash_pgrotated = simple_hash("pgrotated");
-        // hash_pgscan_direct_dma = simple_hash("pgscan_direct_dma");
-        // hash_pgscan_direct_dma32 = simple_hash("pgscan_direct_dma32");
-        // hash_pgscan_direct_movable = simple_hash("pgscan_direct_movable");
-        // hash_pgscan_direct_normal = simple_hash("pgscan_direct_normal");
-        // hash_pgscan_kswapd_dma = simple_hash("pgscan_kswapd_dma");
-        // hash_pgscan_kswapd_dma32 = simple_hash("pgscan_kswapd_dma32");
-        // hash_pgscan_kswapd_movable = simple_hash("pgscan_kswapd_movable");
-        // hash_pgscan_kswapd_normal = simple_hash("pgscan_kswapd_normal");
-        // hash_pgsteal_direct_dma = simple_hash("pgsteal_direct_dma");
-        // hash_pgsteal_direct_dma32 = simple_hash("pgsteal_direct_dma32");
-        // hash_pgsteal_direct_movable = simple_hash("pgsteal_direct_movable");
-        // hash_pgsteal_direct_normal = simple_hash("pgsteal_direct_normal");
-        // hash_pgsteal_kswapd_dma = simple_hash("pgsteal_kswapd_dma");
-        // hash_pgsteal_kswapd_dma32 = simple_hash("pgsteal_kswapd_dma32");
-        // hash_pgsteal_kswapd_movable = simple_hash("pgsteal_kswapd_movable");
-        // hash_pgsteal_kswapd_normal = simple_hash("pgsteal_kswapd_normal");
-        hash_pswpin = simple_hash("pswpin");
-        hash_pswpout = simple_hash("pswpout");
-        // hash_slabs_scanned = simple_hash("slabs_scanned");
-        // hash_thp_collapse_alloc = simple_hash("thp_collapse_alloc");
-        // hash_thp_collapse_alloc_failed = simple_hash("thp_collapse_alloc_failed");
-        // hash_thp_fault_alloc = simple_hash("thp_fault_alloc");
-        // hash_thp_fault_fallback = simple_hash("thp_fault_fallback");
-        // hash_thp_split = simple_hash("thp_split");
-        // hash_unevictable_pgs_cleared = simple_hash("unevictable_pgs_cleared");
-        // hash_unevictable_pgs_culled = simple_hash("unevictable_pgs_culled");
-        // hash_unevictable_pgs_mlocked = simple_hash("unevictable_pgs_mlocked");
-        // hash_unevictable_pgs_mlockfreed = simple_hash("unevictable_pgs_mlockfreed");
-        // hash_unevictable_pgs_munlocked = simple_hash("unevictable_pgs_munlocked");
-        // hash_unevictable_pgs_rescued = simple_hash("unevictable_pgs_rescued");
-        // hash_unevictable_pgs_scanned = simple_hash("unevictable_pgs_scanned");
-        // hash_unevictable_pgs_stranded = simple_hash("unevictable_pgs_stranded");
+
+        arl_base = arl_create("vmstat", NULL, 60);
+        arl_expect(arl_base, "pgfault", &pgfault);
+        arl_expect(arl_base, "pgmajfault", &pgmajfault);
+        arl_expect(arl_base, "pgpgin", &pgpgin);
+        arl_expect(arl_base, "pgpgout", &pgpgout);
+        arl_expect(arl_base, "pswpin", &pswpin);
+        arl_expect(arl_base, "pswpout", &pswpout);
+
+        if(do_numa == CONFIG_BOOLEAN_YES || (do_numa == CONFIG_BOOLEAN_AUTO && get_numa_node_count() >= 2)) {
+            arl_expect(arl_base, "numa_foreign", &numa_foreign);
+            arl_expect(arl_base, "numa_hint_faults_local", &numa_hint_faults_local);
+            arl_expect(arl_base, "numa_hint_faults", &numa_hint_faults);
+            arl_expect(arl_base, "numa_huge_pte_updates", &numa_huge_pte_updates);
+            arl_expect(arl_base, "numa_interleave", &numa_interleave);
+            arl_expect(arl_base, "numa_local", &numa_local);
+            arl_expect(arl_base, "numa_other", &numa_other);
+            arl_expect(arl_base, "numa_pages_migrated", &numa_pages_migrated);
+            arl_expect(arl_base, "numa_pte_updates", &numa_pte_updates);
+        }
+        else {
+            // Do not expect numa metrics when they are not needed.
+            // By not adding them, the ARL will stop processing the file
+            // when all the expected metrics are collected.
+            // Also ARL will not parse their values.
+            has_numa = 0;
+            do_numa = CONFIG_BOOLEAN_NO;
+        }
     }
 
     if(unlikely(!ff)) {
         char filename[FILENAME_MAX + 1];
-        snprintfz(filename, FILENAME_MAX, "%s%s", global_host_prefix, "/proc/vmstat");
+        snprintfz(filename, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/proc/vmstat");
         ff = procfile_open(config_get("plugin:proc:/proc/vmstat", "filename to monitor", filename), " \t:", PROCFILE_FLAG_DEFAULT);
         if(unlikely(!ff)) return 1;
     }
@@ -208,220 +70,33 @@ int do_proc_vmstat(int update_every, unsigned long long dt) {
     ff = procfile_readall(ff);
     if(unlikely(!ff)) return 0; // we return 0, so that we will retry to open it next time
 
-    uint32_t lines = procfile_lines(ff), l;
+    size_t lines = procfile_lines(ff), l;
 
-    // unsigned long long allocstall = 0ULL;
-    // unsigned long long compact_blocks_moved = 0ULL;
-    // unsigned long long compact_fail = 0ULL;
-    // unsigned long long compact_pagemigrate_failed = 0ULL;
-    // unsigned long long compact_pages_moved = 0ULL;
-    // unsigned long long compact_stall = 0ULL;
-    // unsigned long long compact_success = 0ULL;
-    // unsigned long long htlb_buddy_alloc_fail = 0ULL;
-    // unsigned long long htlb_buddy_alloc_success = 0ULL;
-    // unsigned long long kswapd_high_wmark_hit_quickly = 0ULL;
-    // unsigned long long kswapd_inodesteal = 0ULL;
-    // unsigned long long kswapd_low_wmark_hit_quickly = 0ULL;
-    // unsigned long long kswapd_skip_congestion_wait = 0ULL;
-    // unsigned long long nr_active_anon = 0ULL;
-    // unsigned long long nr_active_file = 0ULL;
-    // unsigned long long nr_anon_pages = 0ULL;
-    // unsigned long long nr_anon_transparent_hugepages = 0ULL;
-    // unsigned long long nr_bounce = 0ULL;
-    // unsigned long long nr_dirtied = 0ULL;
-    // unsigned long long nr_dirty = 0ULL;
-    // unsigned long long nr_dirty_background_threshold = 0ULL;
-    // unsigned long long nr_dirty_threshold = 0ULL;
-    // unsigned long long nr_file_pages = 0ULL;
-    // unsigned long long nr_free_pages = 0ULL;
-    // unsigned long long nr_inactive_anon = 0ULL;
-    // unsigned long long nr_inactive_file = 0ULL;
-    // unsigned long long nr_isolated_anon = 0ULL;
-    // unsigned long long nr_isolated_file = 0ULL;
-    // unsigned long long nr_kernel_stack = 0ULL;
-    // unsigned long long nr_mapped = 0ULL;
-    // unsigned long long nr_mlock = 0ULL;
-    // unsigned long long nr_page_table_pages = 0ULL;
-    // unsigned long long nr_shmem = 0ULL;
-    // unsigned long long nr_slab_reclaimable = 0ULL;
-    // unsigned long long nr_slab_unreclaimable = 0ULL;
-    // unsigned long long nr_unevictable = 0ULL;
-    // unsigned long long nr_unstable = 0ULL;
-    // unsigned long long nr_vmscan_immediate_reclaim = 0ULL;
-    // unsigned long long nr_vmscan_write = 0ULL;
-    // unsigned long long nr_writeback = 0ULL;
-    // unsigned long long nr_writeback_temp = 0ULL;
-    // unsigned long long nr_written = 0ULL;
-    // unsigned long long pageoutrun = 0ULL;
-    // unsigned long long pgactivate = 0ULL;
-    // unsigned long long pgalloc_dma = 0ULL;
-    // unsigned long long pgalloc_dma32 = 0ULL;
-    // unsigned long long pgalloc_movable = 0ULL;
-    // unsigned long long pgalloc_normal = 0ULL;
-    // unsigned long long pgdeactivate = 0ULL;
-    unsigned long long pgfault = 0ULL;
-    // unsigned long long pgfree = 0ULL;
-    // unsigned long long pginodesteal = 0ULL;
-    unsigned long long pgmajfault = 0ULL;
-    unsigned long long pgpgin = 0ULL;
-    unsigned long long pgpgout = 0ULL;
-    // unsigned long long pgrefill_dma = 0ULL;
-    // unsigned long long pgrefill_dma32 = 0ULL;
-    // unsigned long long pgrefill_movable = 0ULL;
-    // unsigned long long pgrefill_normal = 0ULL;
-    // unsigned long long pgrotated = 0ULL;
-    // unsigned long long pgscan_direct_dma = 0ULL;
-    // unsigned long long pgscan_direct_dma32 = 0ULL;
-    // unsigned long long pgscan_direct_movable = 0ULL;
-    // unsigned long long pgscan_direct_normal = 0ULL;
-    // unsigned long long pgscan_kswapd_dma = 0ULL;
-    // unsigned long long pgscan_kswapd_dma32 = 0ULL;
-    // unsigned long long pgscan_kswapd_movable = 0ULL;
-    // unsigned long long pgscan_kswapd_normal = 0ULL;
-    // unsigned long long pgsteal_direct_dma = 0ULL;
-    // unsigned long long pgsteal_direct_dma32 = 0ULL;
-    // unsigned long long pgsteal_direct_movable = 0ULL;
-    // unsigned long long pgsteal_direct_normal = 0ULL;
-    // unsigned long long pgsteal_kswapd_dma = 0ULL;
-    // unsigned long long pgsteal_kswapd_dma32 = 0ULL;
-    // unsigned long long pgsteal_kswapd_movable = 0ULL;
-    // unsigned long long pgsteal_kswapd_normal = 0ULL;
-    unsigned long long pswpin = 0ULL;
-    unsigned long long pswpout = 0ULL;
-    // unsigned long long slabs_scanned = 0ULL;
-    // unsigned long long thp_collapse_alloc = 0ULL;
-    // unsigned long long thp_collapse_alloc_failed = 0ULL;
-    // unsigned long long thp_fault_alloc = 0ULL;
-    // unsigned long long thp_fault_fallback = 0ULL;
-    // unsigned long long thp_split = 0ULL;
-    // unsigned long long unevictable_pgs_cleared = 0ULL;
-    // unsigned long long unevictable_pgs_culled = 0ULL;
-    // unsigned long long unevictable_pgs_mlocked = 0ULL;
-    // unsigned long long unevictable_pgs_mlockfreed = 0ULL;
-    // unsigned long long unevictable_pgs_munlocked = 0ULL;
-    // unsigned long long unevictable_pgs_rescued = 0ULL;
-    // unsigned long long unevictable_pgs_scanned = 0ULL;
-    // unsigned long long unevictable_pgs_stranded = 0ULL;
-
+    arl_begin(arl_base);
     for(l = 0; l < lines ;l++) {
-        uint32_t words = procfile_linewords(ff, l);
+        size_t words = procfile_linewords(ff, l);
         if(unlikely(words < 2)) {
-            if(unlikely(words)) error("Cannot read /proc/vmstat line %u. Expected 2 params, read %u.", l, words);
+            if(unlikely(words)) error("Cannot read /proc/vmstat line %zu. Expected 2 params, read %zu.", l, words);
             continue;
         }
 
-        char *name = procfile_lineword(ff, l, 0);
-        char * value = procfile_lineword(ff, l, 1);
-        if(unlikely(!name || !*name || !value || !*value)) continue;
-
-        uint32_t hash = simple_hash(name);
-
-        if(unlikely(0)) ;
-        // else if(unlikely(hash == hash_allocstall && strcmp(name, "allocstall") == 0)) allocstall = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_compact_blocks_moved && strcmp(name, "compact_blocks_moved") == 0)) compact_blocks_moved = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_compact_fail && strcmp(name, "compact_fail") == 0)) compact_fail = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_compact_pagemigrate_failed && strcmp(name, "compact_pagemigrate_failed") == 0)) compact_pagemigrate_failed = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_compact_pages_moved && strcmp(name, "compact_pages_moved") == 0)) compact_pages_moved = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_compact_stall && strcmp(name, "compact_stall") == 0)) compact_stall = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_compact_success && strcmp(name, "compact_success") == 0)) compact_success = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_htlb_buddy_alloc_fail && strcmp(name, "htlb_buddy_alloc_fail") == 0)) htlb_buddy_alloc_fail = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_htlb_buddy_alloc_success && strcmp(name, "htlb_buddy_alloc_success") == 0)) htlb_buddy_alloc_success = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_kswapd_high_wmark_hit_quickly && strcmp(name, "kswapd_high_wmark_hit_quickly") == 0)) kswapd_high_wmark_hit_quickly = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_kswapd_inodesteal && strcmp(name, "kswapd_inodesteal") == 0)) kswapd_inodesteal = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_kswapd_low_wmark_hit_quickly && strcmp(name, "kswapd_low_wmark_hit_quickly") == 0)) kswapd_low_wmark_hit_quickly = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_kswapd_skip_congestion_wait && strcmp(name, "kswapd_skip_congestion_wait") == 0)) kswapd_skip_congestion_wait = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_active_anon && strcmp(name, "nr_active_anon") == 0)) nr_active_anon = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_active_file && strcmp(name, "nr_active_file") == 0)) nr_active_file = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_anon_pages && strcmp(name, "nr_anon_pages") == 0)) nr_anon_pages = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_anon_transparent_hugepages && strcmp(name, "nr_anon_transparent_hugepages") == 0)) nr_anon_transparent_hugepages = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_bounce && strcmp(name, "nr_bounce") == 0)) nr_bounce = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_dirtied && strcmp(name, "nr_dirtied") == 0)) nr_dirtied = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_dirty && strcmp(name, "nr_dirty") == 0)) nr_dirty = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_dirty_background_threshold && strcmp(name, "nr_dirty_background_threshold") == 0)) nr_dirty_background_threshold = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_dirty_threshold && strcmp(name, "nr_dirty_threshold") == 0)) nr_dirty_threshold = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_file_pages && strcmp(name, "nr_file_pages") == 0)) nr_file_pages = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_free_pages && strcmp(name, "nr_free_pages") == 0)) nr_free_pages = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_inactive_anon && strcmp(name, "nr_inactive_anon") == 0)) nr_inactive_anon = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_inactive_file && strcmp(name, "nr_inactive_file") == 0)) nr_inactive_file = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_isolated_anon && strcmp(name, "nr_isolated_anon") == 0)) nr_isolated_anon = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_isolated_file && strcmp(name, "nr_isolated_file") == 0)) nr_isolated_file = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_kernel_stack && strcmp(name, "nr_kernel_stack") == 0)) nr_kernel_stack = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_mapped && strcmp(name, "nr_mapped") == 0)) nr_mapped = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_mlock && strcmp(name, "nr_mlock") == 0)) nr_mlock = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_page_table_pages && strcmp(name, "nr_page_table_pages") == 0)) nr_page_table_pages = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_shmem && strcmp(name, "nr_shmem") == 0)) nr_shmem = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_slab_reclaimable && strcmp(name, "nr_slab_reclaimable") == 0)) nr_slab_reclaimable = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_slab_unreclaimable && strcmp(name, "nr_slab_unreclaimable") == 0)) nr_slab_unreclaimable = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_unevictable && strcmp(name, "nr_unevictable") == 0)) nr_unevictable = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_unstable && strcmp(name, "nr_unstable") == 0)) nr_unstable = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_vmscan_immediate_reclaim && strcmp(name, "nr_vmscan_immediate_reclaim") == 0)) nr_vmscan_immediate_reclaim = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_vmscan_write && strcmp(name, "nr_vmscan_write") == 0)) nr_vmscan_write = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_writeback && strcmp(name, "nr_writeback") == 0)) nr_writeback = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_writeback_temp && strcmp(name, "nr_writeback_temp") == 0)) nr_writeback_temp = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_nr_written && strcmp(name, "nr_written") == 0)) nr_written = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pageoutrun && strcmp(name, "pageoutrun") == 0)) pageoutrun = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgactivate && strcmp(name, "pgactivate") == 0)) pgactivate = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgalloc_dma && strcmp(name, "pgalloc_dma") == 0)) pgalloc_dma = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgalloc_dma32 && strcmp(name, "pgalloc_dma32") == 0)) pgalloc_dma32 = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgalloc_movable && strcmp(name, "pgalloc_movable") == 0)) pgalloc_movable = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgalloc_normal && strcmp(name, "pgalloc_normal") == 0)) pgalloc_normal = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgdeactivate && strcmp(name, "pgdeactivate") == 0)) pgdeactivate = strtoull(value, NULL, 10);
-        else if(unlikely(hash == hash_pgfault && strcmp(name, "pgfault") == 0)) pgfault = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgfree && strcmp(name, "pgfree") == 0)) pgfree = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pginodesteal && strcmp(name, "pginodesteal") == 0)) pginodesteal = strtoull(value, NULL, 10);
-        else if(unlikely(hash == hash_pgmajfault && strcmp(name, "pgmajfault") == 0)) pgmajfault = strtoull(value, NULL, 10);
-        else if(unlikely(hash == hash_pgpgin && strcmp(name, "pgpgin") == 0)) pgpgin = strtoull(value, NULL, 10);
-        else if(unlikely(hash == hash_pgpgout && strcmp(name, "pgpgout") == 0)) pgpgout = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgrefill_dma && strcmp(name, "pgrefill_dma") == 0)) pgrefill_dma = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgrefill_dma32 && strcmp(name, "pgrefill_dma32") == 0)) pgrefill_dma32 = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgrefill_movable && strcmp(name, "pgrefill_movable") == 0)) pgrefill_movable = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgrefill_normal && strcmp(name, "pgrefill_normal") == 0)) pgrefill_normal = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgrotated && strcmp(name, "pgrotated") == 0)) pgrotated = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgscan_direct_dma && strcmp(name, "pgscan_direct_dma") == 0)) pgscan_direct_dma = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgscan_direct_dma32 && strcmp(name, "pgscan_direct_dma32") == 0)) pgscan_direct_dma32 = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgscan_direct_movable && strcmp(name, "pgscan_direct_movable") == 0)) pgscan_direct_movable = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgscan_direct_normal && strcmp(name, "pgscan_direct_normal") == 0)) pgscan_direct_normal = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgscan_kswapd_dma && strcmp(name, "pgscan_kswapd_dma") == 0)) pgscan_kswapd_dma = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgscan_kswapd_dma32 && strcmp(name, "pgscan_kswapd_dma32") == 0)) pgscan_kswapd_dma32 = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgscan_kswapd_movable && strcmp(name, "pgscan_kswapd_movable") == 0)) pgscan_kswapd_movable = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgscan_kswapd_normal && strcmp(name, "pgscan_kswapd_normal") == 0)) pgscan_kswapd_normal = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgsteal_direct_dma && strcmp(name, "pgsteal_direct_dma") == 0)) pgsteal_direct_dma = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgsteal_direct_dma32 && strcmp(name, "pgsteal_direct_dma32") == 0)) pgsteal_direct_dma32 = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgsteal_direct_movable && strcmp(name, "pgsteal_direct_movable") == 0)) pgsteal_direct_movable = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgsteal_direct_normal && strcmp(name, "pgsteal_direct_normal") == 0)) pgsteal_direct_normal = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgsteal_kswapd_dma && strcmp(name, "pgsteal_kswapd_dma") == 0)) pgsteal_kswapd_dma = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgsteal_kswapd_dma32 && strcmp(name, "pgsteal_kswapd_dma32") == 0)) pgsteal_kswapd_dma32 = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgsteal_kswapd_movable && strcmp(name, "pgsteal_kswapd_movable") == 0)) pgsteal_kswapd_movable = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_pgsteal_kswapd_normal && strcmp(name, "pgsteal_kswapd_normal") == 0)) pgsteal_kswapd_normal = strtoull(value, NULL, 10);
-        else if(unlikely(hash == hash_pswpin && strcmp(name, "pswpin") == 0)) pswpin = strtoull(value, NULL, 10);
-        else if(unlikely(hash == hash_pswpout && strcmp(name, "pswpout") == 0)) pswpout = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_slabs_scanned && strcmp(name, "slabs_scanned") == 0)) slabs_scanned = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_thp_collapse_alloc && strcmp(name, "thp_collapse_alloc") == 0)) thp_collapse_alloc = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_thp_collapse_alloc_failed && strcmp(name, "thp_collapse_alloc_failed") == 0)) thp_collapse_alloc_failed = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_thp_fault_alloc && strcmp(name, "thp_fault_alloc") == 0)) thp_fault_alloc = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_thp_fault_fallback && strcmp(name, "thp_fault_fallback") == 0)) thp_fault_fallback = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_thp_split && strcmp(name, "thp_split") == 0)) thp_split = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_unevictable_pgs_cleared && strcmp(name, "unevictable_pgs_cleared") == 0)) unevictable_pgs_cleared = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_unevictable_pgs_culled && strcmp(name, "unevictable_pgs_culled") == 0)) unevictable_pgs_culled = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_unevictable_pgs_mlocked && strcmp(name, "unevictable_pgs_mlocked") == 0)) unevictable_pgs_mlocked = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_unevictable_pgs_mlockfreed && strcmp(name, "unevictable_pgs_mlockfreed") == 0)) unevictable_pgs_mlockfreed = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_unevictable_pgs_munlocked && strcmp(name, "unevictable_pgs_munlocked") == 0)) unevictable_pgs_munlocked = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_unevictable_pgs_rescued && strcmp(name, "unevictable_pgs_rescued") == 0)) unevictable_pgs_rescued = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_unevictable_pgs_scanned && strcmp(name, "unevictable_pgs_scanned") == 0)) unevictable_pgs_scanned = strtoull(value, NULL, 10);
-        // else if(unlikely(hash == hash_unevictable_pgs_stranded && strcmp(name, "unevictable_pgs_stranded") == 0)) unevictable_pgs_stranded = strtoull(value, NULL, 10);
+        if(unlikely(arl_check(arl_base,
+                procfile_lineword(ff, l, 0),
+                procfile_lineword(ff, l, 1)))) break;
     }
 
     // --------------------------------------------------------------------
 
-    if(pswpin || pswpout || do_swapio == CONFIG_ONDEMAND_YES) {
-        do_swapio = CONFIG_ONDEMAND_YES;
+    if(pswpin || pswpout || do_swapio == CONFIG_BOOLEAN_YES) {
+        do_swapio = CONFIG_BOOLEAN_YES;
 
         static RRDSET *st_swapio = NULL;
         if(unlikely(!st_swapio)) {
-            st_swapio = rrdset_create("system", "swapio", NULL, "swap", NULL, "Swap I/O", "kilobytes/s", 250, update_every, RRDSET_TYPE_AREA);
+            st_swapio = rrdset_create_localhost("system", "swapio", NULL, "swap", NULL, "Swap I/O", "kilobytes/s", 250
+                                                , update_every, RRDSET_TYPE_AREA);
 
-            rrddim_add(st_swapio, "in",  NULL, sysconf(_SC_PAGESIZE), 1024, RRDDIM_INCREMENTAL);
-            rrddim_add(st_swapio, "out", NULL, -sysconf(_SC_PAGESIZE), 1024, RRDDIM_INCREMENTAL);
+            rrddim_add(st_swapio, "in",  NULL, sysconf(_SC_PAGESIZE), 1024, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st_swapio, "out", NULL, -sysconf(_SC_PAGESIZE), 1024, RRD_ALGORITHM_INCREMENTAL);
         }
         else rrdset_next(st_swapio);
 
@@ -435,10 +110,11 @@ int do_proc_vmstat(int update_every, unsigned long long dt) {
     if(do_io) {
         static RRDSET *st_io = NULL;
         if(unlikely(!st_io)) {
-            st_io = rrdset_create("system", "io", NULL, "disk", NULL, "Disk I/O", "kilobytes/s", 150, update_every, RRDSET_TYPE_AREA);
+            st_io = rrdset_create_localhost("system", "io", NULL, "disk", NULL, "Disk I/O", "kilobytes/s", 150
+                                            , update_every, RRDSET_TYPE_AREA);
 
-            rrddim_add(st_io, "in",  NULL,  1, 1, RRDDIM_INCREMENTAL);
-            rrddim_add(st_io, "out", NULL, -1, 1, RRDDIM_INCREMENTAL);
+            rrddim_add(st_io, "in",  NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st_io, "out", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
         }
         else rrdset_next(st_io);
 
@@ -452,17 +128,67 @@ int do_proc_vmstat(int update_every, unsigned long long dt) {
     if(do_pgfaults) {
         static RRDSET *st_pgfaults = NULL;
         if(unlikely(!st_pgfaults)) {
-            st_pgfaults = rrdset_create("mem", "pgfaults", NULL, "system", NULL, "Memory Page Faults", "page faults/s", 500, update_every, RRDSET_TYPE_LINE);
-            st_pgfaults->isdetail = 1;
+            st_pgfaults = rrdset_create_localhost("mem", "pgfaults", NULL, "system", NULL, "Memory Page Faults"
+                                                  , "page faults/s", 500, update_every, RRDSET_TYPE_LINE);
+            rrdset_flag_set(st_pgfaults, RRDSET_FLAG_DETAIL);
 
-            rrddim_add(st_pgfaults, "minor",  NULL,  1, 1, RRDDIM_INCREMENTAL);
-            rrddim_add(st_pgfaults, "major", NULL, -1, 1, RRDDIM_INCREMENTAL);
+            rrddim_add(st_pgfaults, "minor",  NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st_pgfaults, "major", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
         }
         else rrdset_next(st_pgfaults);
 
         rrddim_set(st_pgfaults, "minor", pgfault);
         rrddim_set(st_pgfaults, "major", pgmajfault);
         rrdset_done(st_pgfaults);
+    }
+
+    // --------------------------------------------------------------------
+
+    // Ondemand criteria for NUMA. Since this won't change at run time, we
+    // check it only once. We check whether the node count is >= 2 because
+    // single-node systems have uninteresting statistics (since all accesses
+    // are local).
+    if(unlikely(has_numa == -1))
+        has_numa = (numa_local || numa_foreign || numa_interleave || numa_other || numa_pte_updates ||
+                     numa_huge_pte_updates || numa_hint_faults || numa_hint_faults_local || numa_pages_migrated) ? 1 : 0;
+
+    if(do_numa == CONFIG_BOOLEAN_YES || (do_numa == CONFIG_BOOLEAN_AUTO && has_numa)) {
+        do_numa = CONFIG_BOOLEAN_YES;
+
+        static RRDSET *st_numa = NULL;
+        if(unlikely(!st_numa)) {
+            st_numa = rrdset_create_localhost("mem", "numa", NULL, "numa", NULL, "NUMA events", "events/s", 800
+                                              , update_every, RRDSET_TYPE_LINE);
+            rrdset_flag_set(st_numa, RRDSET_FLAG_DETAIL);
+
+            // These depend on CONFIG_NUMA in the kernel.
+            rrddim_add(st_numa, "local", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st_numa, "foreign", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st_numa, "interleave", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st_numa, "other", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
+
+            // The following stats depend on CONFIG_NUMA_BALANCING in the
+            // kernel.
+            rrddim_add(st_numa, "pte_updates", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st_numa, "huge_pte_updates", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st_numa, "hint_faults", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st_numa, "hint_faults_local", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st_numa, "pages_migrated", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
+        }
+        else rrdset_next(st_numa);
+
+        rrddim_set(st_numa, "local", numa_local);
+        rrddim_set(st_numa, "foreign", numa_foreign);
+        rrddim_set(st_numa, "interleave", numa_interleave);
+        rrddim_set(st_numa, "other", numa_other);
+
+        rrddim_set(st_numa, "pte_updates", numa_pte_updates);
+        rrddim_set(st_numa, "huge_pte_updates", numa_huge_pte_updates);
+        rrddim_set(st_numa, "hint_faults", numa_hint_faults);
+        rrddim_set(st_numa, "hint_faults_local", numa_hint_faults_local);
+        rrddim_set(st_numa, "pages_migrated", numa_pages_migrated);
+
+        rrdset_done(st_numa);
     }
 
     return 0;

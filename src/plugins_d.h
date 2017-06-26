@@ -4,14 +4,23 @@
 #define PLUGINSD_FILE_SUFFIX ".plugin"
 #define PLUGINSD_FILE_SUFFIX_LEN strlen(PLUGINSD_FILE_SUFFIX)
 #define PLUGINSD_CMD_MAX (FILENAME_MAX*2)
+
+#define PLUGINSD_KEYWORD_CHART "CHART"
+#define PLUGINSD_KEYWORD_DIMENSION "DIMENSION"
+#define PLUGINSD_KEYWORD_BEGIN "BEGIN"
+#define PLUGINSD_KEYWORD_END "END"
+#define PLUGINSD_KEYWORD_FLUSH "FLUSH"
+#define PLUGINSD_KEYWORD_DISABLE "DISABLE"
+
 #define PLUGINSD_LINE_MAX 1024
+#define PLUGINSD_MAX_WORDS 20
 
 struct plugind {
     char id[CONFIG_MAX_NAME+1];         // config node id
 
     char filename[FILENAME_MAX+1];      // just the filename
     char fullfilename[FILENAME_MAX+1];  // with path
-    char cmd[PLUGINSD_CMD_MAX+1];       // the command that is executes
+    char cmd[PLUGINSD_CMD_MAX+1];       // the command that it executes
 
     pid_t pid;
     pthread_t thread;
@@ -23,8 +32,8 @@ struct plugind {
                                         // without collecting values
 
     int update_every;                   // the plugin default data collection frequency
-    int obsolete;                       // do not touch this structure after setting this to 1
-    int enabled;                        // if this is enabled or not
+    volatile int obsolete;              // do not touch this structure after setting this to 1
+    volatile int enabled;               // if this is enabled or not
 
     time_t started_t;
 
@@ -34,5 +43,7 @@ struct plugind {
 extern struct plugind *pluginsd_root;
 
 extern void *pluginsd_main(void *ptr);
+extern size_t pluginsd_process(RRDHOST *host, struct plugind *cd, FILE *fp, int trust_durations);
+extern int pluginsd_split_words(char *str, char **words, int max_words);
 
 #endif /* NETDATA_PLUGINS_D_H */

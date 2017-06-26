@@ -1,9 +1,6 @@
 #include "common.h"
 
 #define RRD_TYPE_NET_SNMP           "ipv4"
-#define RRD_TYPE_NET_SNMP_LEN       strlen(RRD_TYPE_NET_SNMP)
-
-#define NETSTAT_PRESENT 0x00000001
 
 struct netstat_columns {
     char *name;
@@ -174,13 +171,13 @@ static unsigned long long *netstat_columns_find(struct netstat_columns *nc, cons
     fatal("Cannot find key '%s' in /proc/net/snmp internal array.", name);
 }
 
-static void parse_line_pair(procfile *ff, struct netstat_columns *nc, uint32_t header_line, uint32_t values_line) {
-    uint32_t hwords = procfile_linewords(ff, header_line);
-    uint32_t vwords = procfile_linewords(ff, values_line);
-    uint32_t w, i;
+static void parse_line_pair(procfile *ff, struct netstat_columns *nc, size_t header_line, size_t values_line) {
+    size_t hwords = procfile_linewords(ff, header_line);
+    size_t vwords = procfile_linewords(ff, values_line);
+    size_t w, i;
 
     if(unlikely(vwords > hwords)) {
-        error("File /proc/net/snmp on header line %u has %u words, but on value line %u has %u words.", header_line, hwords, values_line, vwords);
+        error("File /proc/net/snmp on header line %zu has %zu words, but on value line %zu has %zu words.", header_line, hwords, values_line, vwords);
         vwords = hwords;
     }
 
@@ -190,14 +187,14 @@ static void parse_line_pair(procfile *ff, struct netstat_columns *nc, uint32_t h
 
         for(i = 0 ; nc[i].name ;i++) {
             if(unlikely(hash == nc[i].hash && !strcmp(key, nc[i].name))) {
-                nc[i].value = strtoull(procfile_lineword(ff, values_line, w), NULL, 10);
+                nc[i].value = str2ull(procfile_lineword(ff, values_line, w));
                 break;
             }
         }
     }
 }
 
-int do_proc_net_snmp(int update_every, unsigned long long dt) {
+int do_proc_net_snmp(int update_every, usec_t dt) {
     (void)dt;
 
     static procfile *ff = NULL;
@@ -358,7 +355,7 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
 
     if(unlikely(!ff)) {
         char filename[FILENAME_MAX + 1];
-        snprintfz(filename, FILENAME_MAX, "%s%s", global_host_prefix, "/proc/net/snmp");
+        snprintfz(filename, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/proc/net/snmp");
         ff = procfile_open(config_get("plugin:proc:/proc/net/snmp", "filename to monitor", filename), " \t:", PROCFILE_FLAG_DEFAULT);
         if(unlikely(!ff)) return 1;
     }
@@ -366,8 +363,8 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
     ff = procfile_readall(ff);
     if(unlikely(!ff)) return 0; // we return 0, so that we will retry to open it next time
 
-    uint32_t lines = procfile_lines(ff), l;
-    uint32_t words;
+    size_t lines = procfile_lines(ff), l;
+    size_t words;
 
     RRDSET *st;
 
@@ -376,7 +373,7 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
         uint32_t hash = simple_hash(key);
 
         if(unlikely(hash == hash_ip && strcmp(key, "Ip") == 0)) {
-            uint32_t h = l++;
+            size_t h = l++;
 
             if(strcmp(procfile_lineword(ff, l, 0), "Ip") != 0) {
                 error("Cannot read Ip line from /proc/net/snmp.");
@@ -385,7 +382,7 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
 
             words = procfile_linewords(ff, l);
             if(words < 3) {
-                error("Cannot read /proc/net/snmp Ip line. Expected 3+ params, read %u.", words);
+                error("Cannot read /proc/net/snmp Ip line. Expected 3+ params, read %zu.", words);
                 continue;
             }
 
@@ -395,14 +392,15 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
             // --------------------------------------------------------------------
 
             if(do_ip_packets) {
-                st = rrdset_find(RRD_TYPE_NET_SNMP ".packets");
+                st = rrdset_find_localhost(RRD_TYPE_NET_SNMP ".packets");
                 if(!st) {
-                    st = rrdset_create(RRD_TYPE_NET_SNMP, "packets", NULL, "packets", NULL, "IPv4 Packets", "packets/s", 3000, update_every, RRDSET_TYPE_LINE);
+                    st = rrdset_create_localhost(RRD_TYPE_NET_SNMP, "packets", NULL, "packets", NULL, "IPv4 Packets"
+                                                 , "packets/s", 3000, update_every, RRDSET_TYPE_LINE);
 
-                    rrddim_add(st, "InReceives",    "received",  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "OutRequests",   "sent",     -1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "ForwDatagrams", "forwarded", 1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "InDelivers",    "delivered", 1, 1, RRDDIM_INCREMENTAL);
+                    rrddim_add(st, "InReceives",    "received",  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "OutRequests",   "sent",     -1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "ForwDatagrams", "forwarded", 1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "InDelivers",    "delivered", 1, 1, RRD_ALGORITHM_INCREMENTAL);
                 }
                 else rrdset_next(st);
 
@@ -416,14 +414,16 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
             // --------------------------------------------------------------------
 
             if(do_ip_fragsout) {
-                st = rrdset_find(RRD_TYPE_NET_SNMP ".fragsout");
+                st = rrdset_find_localhost(RRD_TYPE_NET_SNMP ".fragsout");
                 if(!st) {
-                    st = rrdset_create(RRD_TYPE_NET_SNMP, "fragsout", NULL, "fragments", NULL, "IPv4 Fragments Sent", "packets/s", 3010, update_every, RRDSET_TYPE_LINE);
-                    st->isdetail = 1;
+                    st = rrdset_create_localhost(RRD_TYPE_NET_SNMP, "fragsout", NULL, "fragments", NULL
+                                                 , "IPv4 Fragments Sent", "packets/s", 3010, update_every
+                                                 , RRDSET_TYPE_LINE);
+                    rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
-                    rrddim_add(st, "FragOKs",     "ok",      1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "FragFails",   "failed", -1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "FragCreates", "created", 1, 1, RRDDIM_INCREMENTAL);
+                    rrddim_add(st, "FragOKs",     "ok",      1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "FragFails",   "failed", -1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "FragCreates", "created", 1, 1, RRD_ALGORITHM_INCREMENTAL);
                 }
                 else rrdset_next(st);
 
@@ -436,14 +436,16 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
             // --------------------------------------------------------------------
 
             if(do_ip_fragsin) {
-                st = rrdset_find(RRD_TYPE_NET_SNMP ".fragsin");
+                st = rrdset_find_localhost(RRD_TYPE_NET_SNMP ".fragsin");
                 if(!st) {
-                    st = rrdset_create(RRD_TYPE_NET_SNMP, "fragsin", NULL, "fragments", NULL, "IPv4 Fragments Reassembly", "packets/s", 3011, update_every, RRDSET_TYPE_LINE);
-                    st->isdetail = 1;
+                    st = rrdset_create_localhost(RRD_TYPE_NET_SNMP, "fragsin", NULL, "fragments", NULL
+                                                 , "IPv4 Fragments Reassembly", "packets/s", 3011, update_every
+                                                 , RRDSET_TYPE_LINE);
+                    rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
-                    rrddim_add(st, "ReasmOKs",   "ok",      1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "ReasmFails", "failed", -1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "ReasmReqds", "all",     1, 1, RRDDIM_INCREMENTAL);
+                    rrddim_add(st, "ReasmOKs",   "ok",      1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "ReasmFails", "failed", -1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "ReasmReqds", "all",     1, 1, RRD_ALGORITHM_INCREMENTAL);
                 }
                 else rrdset_next(st);
 
@@ -456,19 +458,20 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
             // --------------------------------------------------------------------
 
             if(do_ip_errors) {
-                st = rrdset_find(RRD_TYPE_NET_SNMP ".errors");
+                st = rrdset_find_localhost(RRD_TYPE_NET_SNMP ".errors");
                 if(!st) {
-                    st = rrdset_create(RRD_TYPE_NET_SNMP, "errors", NULL, "errors", NULL, "IPv4 Errors", "packets/s", 3002, update_every, RRDSET_TYPE_LINE);
-                    st->isdetail = 1;
+                    st = rrdset_create_localhost(RRD_TYPE_NET_SNMP, "errors", NULL, "errors", NULL, "IPv4 Errors"
+                                                 , "packets/s", 3002, update_every, RRDSET_TYPE_LINE);
+                    rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
-                    rrddim_add(st, "InDiscards",      NULL,  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "OutDiscards",     NULL, -1, 1, RRDDIM_INCREMENTAL);
+                    rrddim_add(st, "InDiscards",      NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "OutDiscards",     NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
 
-                    rrddim_add(st, "InHdrErrors",     NULL,  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "OutNoRoutes",     NULL, -1, 1, RRDDIM_INCREMENTAL);
+                    rrddim_add(st, "InHdrErrors",     NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "OutNoRoutes",     NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
 
-                    rrddim_add(st, "InAddrErrors",    NULL,  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "InUnknownProtos", NULL,  1, 1, RRDDIM_INCREMENTAL);
+                    rrddim_add(st, "InAddrErrors",    NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "InUnknownProtos", NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
                 }
                 else rrdset_next(st);
 
@@ -482,7 +485,7 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
             }
         }
         else if(unlikely(hash == hash_icmp && strcmp(key, "Icmp") == 0)) {
-            uint32_t h = l++;
+            size_t h = l++;
 
             if(strcmp(procfile_lineword(ff, l, 0), "Icmp") != 0) {
                 error("Cannot read Icmp line from /proc/net/snmp.");
@@ -491,7 +494,7 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
 
             words = procfile_linewords(ff, l);
             if(words < 3) {
-                error("Cannot read /proc/net/snmp Icmp line. Expected 3+ params, read %u.", words);
+                error("Cannot read /proc/net/snmp Icmp line. Expected 3+ params, read %zu.", words);
                 continue;
             }
 
@@ -500,12 +503,13 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
             // --------------------------------------------------------------------
 
             if(do_icmp_packets) {
-                st = rrdset_find(RRD_TYPE_NET_SNMP ".icmp");
+                st = rrdset_find_localhost(RRD_TYPE_NET_SNMP ".icmp");
                 if(!st) {
-                    st = rrdset_create(RRD_TYPE_NET_SNMP, "icmp", NULL, "icmp", NULL, "IPv4 ICMP Packets", "packets/s", 2602, update_every, RRDSET_TYPE_LINE);
+                    st = rrdset_create_localhost(RRD_TYPE_NET_SNMP, "icmp", NULL, "icmp", NULL, "IPv4 ICMP Packets"
+                                                 , "packets/s", 2602, update_every, RRDSET_TYPE_LINE);
 
-                    rrddim_add(st, "InMsgs",  "received",  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "OutMsgs", "sent",     -1, 1, RRDDIM_INCREMENTAL);
+                    rrddim_add(st, "InMsgs",  "received",  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "OutMsgs", "sent",     -1, 1, RRD_ALGORITHM_INCREMENTAL);
                 }
                 else rrdset_next(st);
 
@@ -514,13 +518,15 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
 
                 rrdset_done(st);
 
-                st = rrdset_find(RRD_TYPE_NET_SNMP ".icmp_errors");
+                st = rrdset_find_localhost(RRD_TYPE_NET_SNMP ".icmp_errors");
                 if(!st) {
-                    st = rrdset_create(RRD_TYPE_NET_SNMP, "icmp_errors", NULL, "icmp", NULL, "IPv4 ICMP Errors", "packets/s", 2603, update_every, RRDSET_TYPE_LINE);
+                    st = rrdset_create_localhost(RRD_TYPE_NET_SNMP, "icmp_errors", NULL, "icmp", NULL
+                                                 , "IPv4 ICMP Errors", "packets/s", 2603, update_every
+                                                 , RRDSET_TYPE_LINE);
 
-                    rrddim_add(st, "InErrors",     NULL,  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "OutErrors",    NULL, -1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "InCsumErrors", NULL,  1, 1, RRDDIM_INCREMENTAL);
+                    rrddim_add(st, "InErrors",     NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "OutErrors",    NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "InCsumErrors", NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
                 }
                 else rrdset_next(st);
 
@@ -532,7 +538,7 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
             }
         }
         else if(unlikely(hash == hash_icmpmsg && strcmp(key, "IcmpMsg") == 0)) {
-            uint32_t h = l++;
+            size_t h = l++;
 
             if(strcmp(procfile_lineword(ff, l, 0), "IcmpMsg") != 0) {
                 error("Cannot read IcmpMsg line from /proc/net/snmp.");
@@ -546,12 +552,13 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
             if(do_icmpmsg) {
                 int i;
 
-                st = rrdset_find(RRD_TYPE_NET_SNMP ".icmpmsg");
+                st = rrdset_find_localhost(RRD_TYPE_NET_SNMP ".icmpmsg");
                 if(!st) {
-                    st = rrdset_create(RRD_TYPE_NET_SNMP, "icmpmsg", NULL, "icmp", NULL, "IPv4 ICMP Messsages", "packets/s", 2604, update_every, RRDSET_TYPE_LINE);
+                    st = rrdset_create_localhost(RRD_TYPE_NET_SNMP, "icmpmsg", NULL, "icmp", NULL, "IPv4 ICMP Messsages"
+                                                 , "packets/s", 2604, update_every, RRDSET_TYPE_LINE);
 
                     for(i = 0; icmpmsg_data[i].name ;i++)
-                        rrddim_add(st, icmpmsg_data[i].name, icmpmsg_data[i].label,  icmpmsg_data[i].multiplier, 1, RRDDIM_INCREMENTAL);
+                        rrddim_add(st, icmpmsg_data[i].name, icmpmsg_data[i].label,  icmpmsg_data[i].multiplier, 1, RRD_ALGORITHM_INCREMENTAL);
                 }
                 else rrdset_next(st);
 
@@ -562,7 +569,7 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
             }
         }
         else if(unlikely(hash == hash_tcp && strcmp(key, "Tcp") == 0)) {
-            uint32_t h = l++;
+            size_t h = l++;
 
             if(strcmp(procfile_lineword(ff, l, 0), "Tcp") != 0) {
                 error("Cannot read Tcp line from /proc/net/snmp.");
@@ -571,7 +578,7 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
 
             words = procfile_linewords(ff, l);
             if(words < 3) {
-                error("Cannot read /proc/net/snmp Tcp line. Expected 3+ params, read %u.", words);
+                error("Cannot read /proc/net/snmp Tcp line. Expected 3+ params, read %zu.", words);
                 continue;
             }
 
@@ -581,11 +588,12 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
 
             // see http://net-snmp.sourceforge.net/docs/mibs/tcp.html
             if(do_tcp_sockets) {
-                st = rrdset_find(RRD_TYPE_NET_SNMP ".tcpsock");
+                st = rrdset_find_localhost(RRD_TYPE_NET_SNMP ".tcpsock");
                 if(!st) {
-                    st = rrdset_create(RRD_TYPE_NET_SNMP, "tcpsock", NULL, "tcp", NULL, "IPv4 TCP Connections", "active connections", 2500, update_every, RRDSET_TYPE_LINE);
+                    st = rrdset_create_localhost(RRD_TYPE_NET_SNMP, "tcpsock", NULL, "tcp", NULL, "IPv4 TCP Connections"
+                                                 , "active connections", 2500, update_every, RRDSET_TYPE_LINE);
 
-                    rrddim_add(st, "CurrEstab", "connections", 1, 1, RRDDIM_ABSOLUTE);
+                    rrddim_add(st, "CurrEstab", "connections", 1, 1, RRD_ALGORITHM_ABSOLUTE);
                 }
                 else rrdset_next(st);
 
@@ -596,12 +604,13 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
             // --------------------------------------------------------------------
 
             if(do_tcp_packets) {
-                st = rrdset_find(RRD_TYPE_NET_SNMP ".tcppackets");
+                st = rrdset_find_localhost(RRD_TYPE_NET_SNMP ".tcppackets");
                 if(!st) {
-                    st = rrdset_create(RRD_TYPE_NET_SNMP, "tcppackets", NULL, "tcp", NULL, "IPv4 TCP Packets", "packets/s", 2600, update_every, RRDSET_TYPE_LINE);
+                    st = rrdset_create_localhost(RRD_TYPE_NET_SNMP, "tcppackets", NULL, "tcp", NULL, "IPv4 TCP Packets"
+                                                 , "packets/s", 2600, update_every, RRDSET_TYPE_LINE);
 
-                    rrddim_add(st, "InSegs",  "received", 1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "OutSegs", "sent",    -1, 1, RRDDIM_INCREMENTAL);
+                    rrddim_add(st, "InSegs",  "received", 1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "OutSegs", "sent",    -1, 1, RRD_ALGORITHM_INCREMENTAL);
                 }
                 else rrdset_next(st);
 
@@ -613,14 +622,15 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
             // --------------------------------------------------------------------
 
             if(do_tcp_errors) {
-                st = rrdset_find(RRD_TYPE_NET_SNMP ".tcperrors");
+                st = rrdset_find_localhost(RRD_TYPE_NET_SNMP ".tcperrors");
                 if(!st) {
-                    st = rrdset_create(RRD_TYPE_NET_SNMP, "tcperrors", NULL, "tcp", NULL, "IPv4 TCP Errors", "packets/s", 2700, update_every, RRDSET_TYPE_LINE);
-                    st->isdetail = 1;
+                    st = rrdset_create_localhost(RRD_TYPE_NET_SNMP, "tcperrors", NULL, "tcp", NULL, "IPv4 TCP Errors"
+                                                 , "packets/s", 2700, update_every, RRDSET_TYPE_LINE);
+                    rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
-                    rrddim_add(st, "InErrs",       NULL,  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "InCsumErrors", NULL,  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "RetransSegs",  NULL, -1, 1, RRDDIM_INCREMENTAL);
+                    rrddim_add(st, "InErrs",       NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "InCsumErrors", NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "RetransSegs",  NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
                 }
                 else rrdset_next(st);
 
@@ -633,29 +643,42 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
             // --------------------------------------------------------------------
 
             if(do_tcp_handshake) {
-                st = rrdset_find(RRD_TYPE_NET_SNMP ".tcphandshake");
+                st = rrdset_find_localhost(RRD_TYPE_NET_SNMP ".tcphandshake");
                 if(!st) {
-                    st = rrdset_create(RRD_TYPE_NET_SNMP, "tcphandshake", NULL, "tcp", NULL, "IPv4 TCP Handshake Issues", "events/s", 2900, update_every, RRDSET_TYPE_LINE);
-                    st->isdetail = 1;
+                    st = rrdset_create_localhost(
+                            RRD_TYPE_NET_SNMP
+                            , "tcphandshake"
+                            , NULL
+                            , "tcp"
+                            , NULL
+                            , "IPv4 TCP Handshake Issues"
+                            , "events/s"
+                            , 2900
+                            , update_every
+                            , RRDSET_TYPE_LINE
+                    );
+                    rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
-                    rrddim_add(st, "EstabResets",  NULL,  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "OutRsts",      NULL, -1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "ActiveOpens",  NULL,  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "PassiveOpens", NULL,  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "AttemptFails", NULL,  1, 1, RRDDIM_INCREMENTAL);
+                    rrddim_add(st, "EstabResets",   NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "OutRsts",       NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "ActiveOpens",   NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "PassiveOpens",  NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "AttemptFails",  NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "TCPSynRetrans", NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
                 }
                 else rrdset_next(st);
 
-                rrddim_set(st, "EstabResets",  *tcp_EstabResets);
-                rrddim_set(st, "OutRsts",      *tcp_OutRsts);
-                rrddim_set(st, "ActiveOpens",  *tcp_ActiveOpens);
-                rrddim_set(st, "PassiveOpens", *tcp_PassiveOpens);
-                rrddim_set(st, "AttemptFails", *tcp_AttemptFails);
+                rrddim_set(st, "EstabResets",   *tcp_EstabResets);
+                rrddim_set(st, "OutRsts",       *tcp_OutRsts);
+                rrddim_set(st, "ActiveOpens",   *tcp_ActiveOpens);
+                rrddim_set(st, "PassiveOpens",  *tcp_PassiveOpens);
+                rrddim_set(st, "AttemptFails",  *tcp_AttemptFails);
+                rrddim_set(st, "TCPSynRetrans", tcpext_TCPSynRetrans);
                 rrdset_done(st);
             }
         }
         else if(unlikely(hash == hash_udp && strcmp(key, "Udp") == 0)) {
-            uint32_t h = l++;
+            size_t h = l++;
 
             if(strcmp(procfile_lineword(ff, l, 0), "Udp") != 0) {
                 error("Cannot read Udp line from /proc/net/snmp.");
@@ -664,7 +687,7 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
 
             words = procfile_linewords(ff, l);
             if(words < 3) {
-                error("Cannot read /proc/net/snmp Udp line. Expected 3+ params, read %u.", words);
+                error("Cannot read /proc/net/snmp Udp line. Expected 3+ params, read %zu.", words);
                 continue;
             }
 
@@ -674,12 +697,13 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
 
             // see http://net-snmp.sourceforge.net/docs/mibs/udp.html
             if(do_udp_packets) {
-                st = rrdset_find(RRD_TYPE_NET_SNMP ".udppackets");
+                st = rrdset_find_localhost(RRD_TYPE_NET_SNMP ".udppackets");
                 if(!st) {
-                    st = rrdset_create(RRD_TYPE_NET_SNMP, "udppackets", NULL, "udp", NULL, "IPv4 UDP Packets", "packets/s", 2601, update_every, RRDSET_TYPE_LINE);
+                    st = rrdset_create_localhost(RRD_TYPE_NET_SNMP, "udppackets", NULL, "udp", NULL, "IPv4 UDP Packets"
+                                                 , "packets/s", 2601, update_every, RRDSET_TYPE_LINE);
 
-                    rrddim_add(st, "InDatagrams",  "received", 1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "OutDatagrams", "sent",    -1, 1, RRDDIM_INCREMENTAL);
+                    rrddim_add(st, "InDatagrams",  "received", 1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "OutDatagrams", "sent",    -1, 1, RRD_ALGORITHM_INCREMENTAL);
                 }
                 else rrdset_next(st);
 
@@ -691,17 +715,18 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
             // --------------------------------------------------------------------
 
             if(do_udp_errors) {
-                st = rrdset_find(RRD_TYPE_NET_SNMP ".udperrors");
+                st = rrdset_find_localhost(RRD_TYPE_NET_SNMP ".udperrors");
                 if(!st) {
-                    st = rrdset_create(RRD_TYPE_NET_SNMP, "udperrors", NULL, "udp", NULL, "IPv4 UDP Errors", "events/s", 2701, update_every, RRDSET_TYPE_LINE);
-                    st->isdetail = 1;
+                    st = rrdset_create_localhost(RRD_TYPE_NET_SNMP, "udperrors", NULL, "udp", NULL, "IPv4 UDP Errors"
+                                                 , "events/s", 2701, update_every, RRDSET_TYPE_LINE);
+                    rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
-                    rrddim_add(st, "RcvbufErrors", NULL,  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "SndbufErrors", NULL, -1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "InErrors",     NULL,  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "NoPorts",      NULL,  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "InCsumErrors", NULL,  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "IgnoredMulti", NULL,  1, 1, RRDDIM_INCREMENTAL);
+                    rrddim_add(st, "RcvbufErrors", NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "SndbufErrors", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "InErrors",     NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "NoPorts",      NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "InCsumErrors", NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "IgnoredMulti", NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
                 }
                 else rrdset_next(st);
 
@@ -715,7 +740,7 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
             }
         }
         else if(unlikely(hash == hash_udplite && strcmp(key, "UdpLite") == 0)) {
-            uint32_t h = l++;
+            size_t h = l++;
 
             if(strcmp(procfile_lineword(ff, l, 0), "UdpLite") != 0) {
                 error("Cannot read UdpLite line from /proc/net/snmp.");
@@ -724,7 +749,7 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
 
             words = procfile_linewords(ff, l);
             if(words < 3) {
-                error("Cannot read /proc/net/snmp UdpLite line. Expected 3+ params, read %u.", words);
+                error("Cannot read /proc/net/snmp UdpLite line. Expected 3+ params, read %zu.", words);
                 continue;
             }
 
@@ -733,12 +758,14 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
             // --------------------------------------------------------------------
 
             if(do_udplite_packets) {
-                st = rrdset_find(RRD_TYPE_NET_SNMP ".udplite");
+                st = rrdset_find_localhost(RRD_TYPE_NET_SNMP ".udplite");
                 if(!st) {
-                    st = rrdset_create(RRD_TYPE_NET_SNMP, "udplite", NULL, "udplite", NULL, "IPv4 UDPLite Packets", "packets/s", 2603, update_every, RRDSET_TYPE_LINE);
+                    st = rrdset_create_localhost(RRD_TYPE_NET_SNMP, "udplite", NULL, "udplite", NULL
+                                                 , "IPv4 UDPLite Packets", "packets/s", 2603, update_every
+                                                 , RRDSET_TYPE_LINE);
 
-                    rrddim_add(st, "InDatagrams",  "received", 1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "OutDatagrams", "sent",    -1, 1, RRDDIM_INCREMENTAL);
+                    rrddim_add(st, "InDatagrams",  "received", 1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "OutDatagrams", "sent",    -1, 1, RRD_ALGORITHM_INCREMENTAL);
                 }
                 else rrdset_next(st);
 
@@ -746,16 +773,18 @@ int do_proc_net_snmp(int update_every, unsigned long long dt) {
                 rrddim_set(st, "OutDatagrams", *udplite_OutDatagrams);
                 rrdset_done(st);
 
-                st = rrdset_find(RRD_TYPE_NET_SNMP ".udplite_errors");
+                st = rrdset_find_localhost(RRD_TYPE_NET_SNMP ".udplite_errors");
                 if(!st) {
-                    st = rrdset_create(RRD_TYPE_NET_SNMP, "udplite_errors", NULL, "udplite", NULL, "IPv4 UDPLite Errors", "packets/s", 2604, update_every, RRDSET_TYPE_LINE);
+                    st = rrdset_create_localhost(RRD_TYPE_NET_SNMP, "udplite_errors", NULL, "udplite", NULL
+                                                 , "IPv4 UDPLite Errors", "packets/s", 2604, update_every
+                                                 , RRDSET_TYPE_LINE);
 
-                    rrddim_add(st, "RcvbufErrors", NULL,  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "SndbufErrors", NULL, -1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "NoPorts",      NULL,  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "IgnoredMulti", NULL,  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "InErrors",     NULL,  1, 1, RRDDIM_INCREMENTAL);
-                    rrddim_add(st, "InCsumErrors", NULL,  1, 1, RRDDIM_INCREMENTAL);
+                    rrddim_add(st, "RcvbufErrors", NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "SndbufErrors", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "NoPorts",      NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "IgnoredMulti", NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "InErrors",     NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
+                    rrddim_add(st, "InCsumErrors", NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
                 }
                 else rrdset_next(st);
 

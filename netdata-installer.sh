@@ -1,28 +1,60 @@
 #!/usr/bin/env bash
 
-# reload the user profile
-[ -f /etc/profile ] && . /etc/profile
-
 export PATH="${PATH}:/sbin:/usr/sbin:/usr/local/bin:/usr/local/sbin"
 
+netdata_source_dir="$(pwd)"
+installer_dir="$(dirname "${0}")"
+
+if [ "${netdata_source_dir}" != "${installer_dir}" -a "${installer_dir}" != "." ]
+    then
+    echo >&2 "Warning: you are currently in '${netdata_source_dir}' but the installer is in '${installer_dir}'."
+fi
+
+
+# -----------------------------------------------------------------------------
+# reload the user profile
+
+[ -f /etc/profile ] && . /etc/profile
+
+# make sure /etc/profile does not change our current directory
+cd "${netdata_source_dir}" || exit 1
+
+
+# -----------------------------------------------------------------------------
+# load the required functions
+
+if [ -f "${installer_dir}/installer/functions.sh" ]
+    then
+    source "${installer_dir}/installer/functions.sh" || exit 1
+else
+    source "${netdata_source_dir}/installer/functions.sh" || exit 1
+fi
+
+# make sure we save all commands we run
+run_logfile="netdata-installer.log"
+
+
+# -----------------------------------------------------------------------------
 # fix PKG_CHECK_MODULES error
+
 if [ -d /usr/share/aclocal ]
 then
         ACLOCAL_PATH=${ACLOCAL_PATH-/usr/share/aclocal}
         export ACLOCAL_PATH
 fi
 
-LC_ALL=C
+export LC_ALL=C
 umask 002
 
 # Be nice on production environments
 renice 19 $$ >/dev/null 2>/dev/null
 
-processors=$(cat /proc/cpuinfo  | grep ^processor | wc -l)
+processors=$(cat /proc/cpuinfo 2>/dev/null | grep ^processor | wc -l)
 [ $(( processors )) -lt 1 ] && processors=1
 
 # you can set CFLAGS before running installer
-CFLAGS="${CFLAGS--O3}"
+CFLAGS="${CFLAGS--O2}"
+[ "z${CFLAGS}" = "z-O3" ] && CFLAGS="-O2"
 
 # keep a log of this command
 printf "\n# " >>netdata-installer.log
@@ -33,55 +65,22 @@ printf "\n" >>netdata-installer.log
 
 REINSTALL_PWD="${PWD}"
 REINSTALL_COMMAND="$(printf "%q " "$0" "${@}"; printf "\n")"
+# remove options that shown not be inherited by netdata-updater.sh
+REINSTALL_COMMAND="${REINSTALL_COMMAND// --dont-wait/}"
+REINSTALL_COMMAND="${REINSTALL_COMMAND// --dont-start-it/}"
 
-banner() {
-    local   l1="  ^"                                                                      \
-            l2="  |.-.   .-.   .-.   .-.   .-.   .-.   .-.   .-.   .-.   .-.   .-.   .-.   .-"  \
-            l3="  |   '-'   '-'   '-'   '-'   '-'   '-'   '-'   '-'   '-'   '-'   '-'   '-'  "  \
-            l4="  +----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+--->" \
-            sp="                                                                        " \
-            netdata="netdata" start end msg="${*}"
-
-    [ ${#msg} -lt ${#netdata} ] && msg="${msg}${sp:0:$(( ${#netdata} - ${#msg}))}"
-    [ ${#msg} -gt $(( ${#l2} - 20 )) ] && msg="${msg:0:$(( ${#l2} - 23 ))}..."
-
-    start="$(( ${#l2} / 2 - 4 ))"
-    [ $(( start + ${#msg} + 4 )) -gt ${#l2} ] && start=$((${#l2} - ${#msg} - 4))
-    end=$(( ${start} + ${#msg} + 4 ))
-
-    echo >&2
-    echo >&2 "${l1}"
-    echo >&2 "${l2:0:start}${sp:0:2}${netdata}${sp:0:$((end - start - 2 - ${#netdata}))}${l2:end:$((${#l2} - end))}"
-    echo >&2 "${l3:0:start}${sp:0:2}${msg}${sp:0:2}${l3:end:$((${#l2} - end))}"
-    echo >&2 "${l4}"
-    echo >&2
-}
-
-service="$(which service 2>/dev/null || command -v service 2>/dev/null)"
-systemctl="$(which systemctl 2>/dev/null || command -v systemctl 2>/dev/null)"
-service() {
-    local cmd="${1}" action="${2}"
-
-    if [ ! -z "${service}" ]
-    then
-        run "${service}" "${cmd}" "${action}"
-        return $?
-    elif [ ! -z "${systemctl}" ]
-    then
-        run "${systemctl}" "${action}" "${cmd}"
-        return $?
-    fi
-    return 1
-}
+setcap="$(which setcap 2>/dev/null || command -v setcap 2>/dev/null)"
 
 ME="$0"
 DONOTSTART=0
 DONOTWAIT=0
+AUTOUPDATE=0
 NETDATA_PREFIX=
 LIBS_ARE_HERE=0
+NETDATA_CONFIGURE_OPTIONS="${NETDATA_CONFIGURE_OPTIONS-}"
 
 usage() {
-    banner "installer command line options"
+    netdata_banner "installer command line options"
     cat <<USAGE
 
 ${ME} <installer options>
@@ -90,7 +89,7 @@ Valid <installer options> are:
 
    --install /PATH/TO/INSTALL
 
-        If your give: --install /opt
+        If you give: --install /opt
         netdata will be installed in /opt/netdata
 
    --dont-start-it
@@ -103,6 +102,30 @@ Valid <installer options> are:
         Do not wait for the user to press ENTER.
         Start immediately building it.
 
+   --auto-update | -u
+
+        Install netdata-updater to cron,
+        to update netdata automatically once per day
+        (can only be done for installations from git)
+
+   --enable-plugin-freeipmi
+   --disable-plugin-freeipmi
+
+        Enable/disable the FreeIPMI plugin.
+        Default: enable it when libipmimonitoring is available.
+
+   --enable-plugin-nfacct
+   --disable-plugin-nfacct
+
+        Enable/disable the nfacct plugin.
+        Default: enable it when libmnl and libnetfilter_acct are available.
+
+   --enable-lto
+   --disable-lto
+
+        Enable/disable Link-Time-Optimization
+        Default: enabled
+
    --zlib-is-really-here
    --libs-are-really-here
 
@@ -112,7 +135,7 @@ Valid <installer options> are:
         Use this option to allow it continue
         without checking pkg-config.
 
-Netdata will by default be compiled with gcc optimization -O3
+Netdata will by default be compiled with gcc optimization -O2
 If you need to pass different CFLAGS, use something like this:
 
   CFLAGS="<gcc options>" ${ME} <installer options>
@@ -125,12 +148,12 @@ these packages installed:
 
 For the plugins, you will at least need:
 
-   curl nodejs
+   curl, bash v4+, python v2 or v3, node.js
 
 USAGE
 }
 
-md5sum="$(which md5sum 2>/dev/null || command -v md5sum 2>/dev/null)"
+md5sum="$(which md5sum 2>/dev/null || command -v md5sum 2>/dev/null || command -v md5 2>/dev/null)"
 get_git_config_signatures() {
     local x s file md5
 
@@ -146,7 +169,7 @@ get_git_config_signatures() {
             for c in $(git log --follow "conf.d/${x}" | grep ^commit | cut -d ' ' -f 2)
             do
                     git checkout ${c} "conf.d/${x}" || continue
-                    s="$(cat "conf.d/${x}" | md5sum | cut -d ' ' -f 1)"
+                    s="$(cat "conf.d/${x}" | ${md5sum} | cut -d ' ' -f 1)"
                     echo >>configs.signatures.tmp "${s}:${x}"
                     echo "    ${s}"
             done
@@ -190,6 +213,34 @@ do
         then
         DONOTWAIT=1
         shift 1
+    elif [ "$1" = "--auto-update" -o "$1" = "-u" ]
+        then
+        AUTOUPDATE=1
+        shift 1
+    elif [ "$1" = "--enable-plugin-freeipmi" ]
+        then
+        NETDATA_CONFIGURE_OPTIONS="${NETDATA_CONFIGURE_OPTIONS} --enable-plugin-freeipmi"
+        shift 1
+    elif [ "$1" = "--disable-plugin-freeipmi" ]
+        then
+        NETDATA_CONFIGURE_OPTIONS="${NETDATA_CONFIGURE_OPTIONS} --disable-plugin-freeipmi"
+        shift 1
+    elif [ "$1" = "--enable-plugin-nfacct" ]
+        then
+        NETDATA_CONFIGURE_OPTIONS="${NETDATA_CONFIGURE_OPTIONS} --enable-plugin-nfacct"
+        shift 1
+    elif [ "$1" = "--disable-plugin-nfacct" ]
+        then
+        NETDATA_CONFIGURE_OPTIONS="${NETDATA_CONFIGURE_OPTIONS} --disable-plugin-nfacct"
+        shift 1
+    elif [ "$1" = "--enable-lto" ]
+        then
+        NETDATA_CONFIGURE_OPTIONS="${NETDATA_CONFIGURE_OPTIONS} --enable-lto"
+        shift 1
+    elif [ "$1" = "--disable-lto" ]
+        then
+        NETDATA_CONFIGURE_OPTIONS="${NETDATA_CONFIGURE_OPTIONS} --disable-lto"
+        shift 1
     elif [ "$1" = "--help" -o "$1" = "-h" ]
         then
         usage
@@ -207,66 +258,74 @@ do
     fi
 done
 
-banner "real-time performance monitoring, done right!"
-cat <<BANNER
+netdata_banner "real-time performance monitoring, done right!"
+cat <<BANNER1
 
   You are about to build and install netdata to your system.
 
   It will be installed at these locations:
 
-   - the daemon    at ${NETDATA_PREFIX}/usr/sbin/netdata
-   - config files  at ${NETDATA_PREFIX}/etc/netdata
-   - web files     at ${NETDATA_PREFIX}/usr/share/netdata
-   - plugins       at ${NETDATA_PREFIX}/usr/libexec/netdata
-   - cache files   at ${NETDATA_PREFIX}/var/cache/netdata
-   - db files      at ${NETDATA_PREFIX}/var/lib/netdata
-   - log files     at ${NETDATA_PREFIX}/var/log/netdata
-   - pid file      at ${NETDATA_PREFIX}/var/run
+   - the daemon     at ${TPUT_CYAN}${NETDATA_PREFIX}/usr/sbin/netdata${TPUT_RESET}
+   - config files   in ${TPUT_CYAN}${NETDATA_PREFIX}/etc/netdata${TPUT_RESET}
+   - web files      in ${TPUT_CYAN}${NETDATA_PREFIX}/usr/share/netdata${TPUT_RESET}
+   - plugins        in ${TPUT_CYAN}${NETDATA_PREFIX}/usr/libexec/netdata${TPUT_RESET}
+   - cache files    in ${TPUT_CYAN}${NETDATA_PREFIX}/var/cache/netdata${TPUT_RESET}
+   - db files       in ${TPUT_CYAN}${NETDATA_PREFIX}/var/lib/netdata${TPUT_RESET}
+   - log files      in ${TPUT_CYAN}${NETDATA_PREFIX}/var/log/netdata${TPUT_RESET}
+BANNER1
+
+[ "${UID}" -eq 0 ] && cat <<BANNER2
+   - pid file       at ${TPUT_CYAN}${NETDATA_PREFIX}/var/run/netdata.pid${TPUT_RESET}
+   - logrotate file at ${TPUT_CYAN}/etc/logrotate.d/netdata${TPUT_RESET}
+BANNER2
+
+cat <<BANNER3
 
   This installer allows you to change the installation path.
   Press Control-C and run the same command with --help for help.
 
-BANNER
+BANNER3
 
 if [ "${UID}" -ne 0 ]
     then
     if [ -z "${NETDATA_PREFIX}" ]
         then
-        banner "wrong command line options!"
+        netdata_banner "wrong command line options!"
         cat <<NONROOTNOPREFIX
-
-Sorry! This will fail!
-
-You are attempting to install netdata as non-root, but you plan to install it
-in system paths.
-
-Please set an installation prefix, like this:
-
-    $0 ${@} --install /tmp
-
-or, run the installer as root:
-
-    sudo $0 ${@}
-
-We suggest to install it as root, or certain data collectors will not be able
-to work. Netdata drops root privileges when running. So, if you plan to keep
-it, install it as root to get the full functionality.
-
+  
+  ${TPUT_RED}${TPUT_BOLD}Sorry! This will fail!${TPUT_RESET}
+  
+  You are attempting to install netdata as non-root, but you plan
+  to install it in system paths.
+  
+  Please set an installation prefix, like this:
+  
+      $0 ${@} --install /tmp
+  
+  or, run the installer as root:
+  
+      sudo $0 ${@}
+  
+  We suggest to install it as root, or certain data collectors will
+  not be able to work. Netdata drops root privileges when running.
+  So, if you plan to keep it, install it as root to get the full
+  functionality.
+  
 NONROOTNOPREFIX
         exit 1
 
     else
         cat <<NONROOT
-
-IMPORTANT:
-You are about to install netdata as a non-root user.
-Netdata will work, but a few data collection modules that
-require root access will fail.
-
-If you installing permanently on your system, run the
-installer like this:
-
-    sudo $0 ${@}
+ 
+  ${TPUT_RED}${TPUT_BOLD}IMPORTANT${TPUT_RESET}:
+  You are about to install netdata as a non-root user.
+  Netdata will work, but a few data collection modules that
+  require root access will fail.
+  
+  If you installing netdata permanently on your system, run
+  the installer like this:
+  
+     ${TPUT_YELLOW}${TPUT_BOLD}sudo $0 ${@}${TPUT_RESET}
 
 NONROOT
     fi
@@ -305,7 +364,7 @@ then
     then
         echo "Will skip autoreconf step"
     else
-        banner "autotools v2.60 required"
+        netdata_banner "autotools v2.60 required"
         cat <<"EOF"
 
 -------------------------------------------------------------------------------
@@ -332,14 +391,14 @@ if [ ${DONOTWAIT} -eq 0 ]
     then
     if [ ! -z "${NETDATA_PREFIX}" ]
         then
-        read -p "Press ENTER to build and install netdata to '${NETDATA_PREFIX}' > "
+        eval "read >&2 -ep \$'\001${TPUT_BOLD}${TPUT_GREEN}\002Press ENTER to build and install netdata to \'\001${TPUT_CYAN}\002${NETDATA_PREFIX}\001${TPUT_YELLOW}\002\'\001${TPUT_RESET}\002 > ' -e -r REPLY"
     else
-        read -p "Press ENTER to build and install netdata to your system > "
+        eval "read >&2 -ep \$'\001${TPUT_BOLD}${TPUT_GREEN}\002Press ENTER to build and install netdata to your system\001${TPUT_RESET}\002 > ' -e -r REPLY"
     fi
 fi
 
 build_error() {
-    banner "sorry, it failed to build..."
+    netdata_banner "sorry, it failed to build..."
     cat <<EOF
 
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -374,31 +433,6 @@ EOF
     exit 1
 }
 
-run() {
-    printf >>netdata-installer.log "# "
-    printf >>netdata-installer.log "%q " "${@}"
-    printf >>netdata-installer.log " ... "
-
-    printf >&2 "\n"
-    printf >&2 ":-----------------------------------------------------------------------------\n"
-    printf >&2 "Running command:\n"
-    printf >&2 "\n"
-    printf >&2 "%q " "${@}"
-    printf >&2 "\n"
-
-    "${@}"
-
-    local ret=$?
-    if [ ${ret} -ne 0 ]
-        then
-        printf >>netdata-installer.log "FAILED!\n"
-    else
-        printf >>netdata-installer.log "OK\n"
-    fi
-
-    return ${ret}
-}
-
 if [ ${LIBS_ARE_HERE} -eq 1 ]
     then
     shift
@@ -411,6 +445,11 @@ fi
 
 trap build_error EXIT
 
+
+# -----------------------------------------------------------------------------
+echo >&2
+progress "Run autotools to configure the build environment"
+
 if [ "$have_autotools" ]
 then
     run ./autogen.sh || exit 1
@@ -420,29 +459,28 @@ run ./configure \
     --prefix="${NETDATA_PREFIX}/usr" \
     --sysconfdir="${NETDATA_PREFIX}/etc" \
     --localstatedir="${NETDATA_PREFIX}/var" \
-    --with-zlib --with-math --with-user=netdata \
+    --with-zlib \
+    --with-math \
+    --with-user=netdata \
+    ${NETDATA_CONFIGURE_OPTIONS} \
     CFLAGS="${CFLAGS}" || exit 1
 
 # remove the build_error hook
 trap - EXIT
 
-if [ -f src/netdata ]
-    then
-    echo >&2 "Cleaning a possibly old compilation ..."
-    run make clean
-fi
+# -----------------------------------------------------------------------------
+progress "Cleanup compilation directory"
 
-echo >&2 "Compiling netdata ..."
+[ -f src/netdata ] && run make clean
+
+# -----------------------------------------------------------------------------
+progress "Compile netdata"
+
 run make -j${processors} || exit 1
 
-if [ "${BASH_VERSINFO[0]}" -ge "4" ]
-then
-    declare -A configs_signatures=()
-    if [ -f "configs.signatures" ]
-        then
-        source "configs.signatures" || echo >&2 "ERROR: Failed to load configs.signatures !"
-    fi
-fi
+
+# -----------------------------------------------------------------------------
+progress "Migrate configuration files for node.d.plugin and charts.d.plugin"
 
 # migrate existing configuration files
 # for node.d and charts.d
@@ -485,9 +523,39 @@ if [ -d "${NETDATA_PREFIX}/etc/netdata" ]
     done
 fi
 
+# -----------------------------------------------------------------------------
+progress "Backup existing netdata configuration before installing it"
+
+if [ "${BASH_VERSINFO[0]}" -ge "4" ]
+then
+    declare -A configs_signatures=()
+    if [ -f "configs.signatures" ]
+        then
+        source "configs.signatures" || echo >&2 "ERROR: Failed to load configs.signatures !"
+    fi
+fi
+
+config_signature_matches() {
+    local md5="${1}" file="${2}"
+
+    if [ "${BASH_VERSINFO[0]}" -ge "4" ]
+        then
+        [ "${configs_signatures[${md5}]}" = "${file}" ] && return 0
+        return 1
+    fi
+
+    if [ -f "configs.signatures" ]
+        then
+        grep "\['${md5}'\]='${file}'" "configs.signatures" >/dev/null
+        return $?
+    fi
+
+    return 1
+}
+
 # backup user configurations
 installer_backup_suffix="${PID}.${RANDOM}"
-for x in $(find "${NETDATA_PREFIX}/etc/netdata/" -name '*.conf' -type f)
+for x in $(find -L "${NETDATA_PREFIX}/etc/netdata/" -name '*.conf' -type f)
 do
     if [ -f "${x}" ]
         then
@@ -497,7 +565,8 @@ do
         if [ -z "${md5sum}" -o ! -x "${md5sum}" ]
             then
             # we don't have md5sum - keep it
-            cp -p "${x}" "${x}.installer_backup.${installer_backup_suffix}"
+            echo >&2 "File '${TPUT_CYAN}${x}${TPUT_RESET}' ${TPUT_RET}is not known to distribution${TPUT_RESET}. Keeping it."
+            run cp -a "${x}" "${x}.installer_backup.${installer_backup_suffix}"
         else
             # find it relative filename
             f="${x/*\/etc\/netdata\//}"
@@ -511,20 +580,14 @@ do
                 cp "conf.d/${f}" "${x}.orig"
             fi
 
-            if [ "${BASH_VERSINFO[0]}" -ge "4" ]
-            then
-                if [ "${configs_signatures[${md5}]}" = "${f}" ]
+            if config_signature_matches "${md5}" "${f}"
                 then
-                    # it is a stock version - don't keep it
-                    echo >&2 "File '${x}' is stock version."
-                else
-                    # edited by user - keep it
-                    echo >&2 "File '${x}' has been edited by user."
-                    cp -p "${x}" "${x}.installer_backup.${installer_backup_suffix}"
-                fi
+                # it is a stock version - don't keep it
+                echo >&2 "File '${TPUT_CYAN}${x}${TPUT_RESET}' is stock version."
             else
-                echo >&2 "File '${x}' cannot be check for custom edits."
-                cp -p "${x}" "${x}.installer_backup.${installer_backup_suffix}"
+                # edited by user - keep it
+                echo >&2 "File '${TPUT_CYAN}${x}${TPUT_RESET}' ${TPUT_RED} has been edited by user${TPUT_RESET}. Keeping it."
+                run cp -a "${x}" "${x}.installer_backup.${installer_backup_suffix}"
             fi
         fi
 
@@ -534,132 +597,99 @@ do
     fi
 done
 
-echo >&2 "Installing netdata ..."
+
+# -----------------------------------------------------------------------------
+progress "Install netdata"
+
 run make install || exit 1
-
-# restore user configurations
-for x in $(find "${NETDATA_PREFIX}/etc/netdata/" -name '*.conf' -type f)
-do
-    if [ -f "${x}.installer_backup.${installer_backup_suffix}" ]
-        then
-        cp -p "${x}.installer_backup.${installer_backup_suffix}" "${x}"
-        rm -f "${x}.installer_backup.${installer_backup_suffix}"
-    fi
-done
-
-echo >&2 "Fixing permissions ..."
-run find ./system/ -type f -a \! -name \*.in -a \! -name Makefile\* -a \! -name \*.conf  -exec chmod 755 {} \;
-
-NETDATA_ADDED_TO_DOCKER=0
-if [ ${UID} -eq 0 ]
-    then
-    getent group netdata > /dev/null
-    if [ $? -ne 0 ]
-        then
-        echo >&2 "Adding netdata user group ..."
-        run groupadd -r netdata
-    fi
-
-    getent passwd netdata > /dev/null
-    if [ $? -ne 0 ]
-        then
-        echo >&2 "Adding netdata user account ..."
-        run useradd -r -g netdata -c netdata -s $(which nologin 2>/dev/null || command -v nologin 2>/dev/null || echo '/bin/false') -d / netdata
-    fi
-
-    getent group docker > /dev/null
-    if [ $? -eq 0 ]
-        then
-        # find the users in the docker group
-        docker=$(getent group docker | cut -d ':' -f 4)
-        if [[ ",${docker}," =~ ,netdata, ]]
-            then
-            # netdata is already there
-            :
-        else
-            # netdata is not in docker group
-            echo >&2 "Adding netdata user to the docker group (needed to get container names) ..."
-            run usermod -a -G docker netdata
-        fi
-        # let the uninstall script know
-        NETDATA_ADDED_TO_DOCKER=1
-    fi
-
-    if [ -d /etc/logrotate.d -a ! -f /etc/logrotate.d/netdata ]
-        then
-        echo >&2 "Adding netdata logrotate configuration ..."
-        run cp system/netdata.logrotate /etc/logrotate.d/netdata
-    fi
-fi
 
 
 # -----------------------------------------------------------------------------
-# load options from the configuration file
+progress "Restore user edited netdata configuration files"
+
+for x in $(find -L "${NETDATA_PREFIX}/etc/netdata/" -name '*.conf' -type f)
+do
+    if [ -f "${x}.installer_backup.${installer_backup_suffix}" ]
+        then
+        run cp -a "${x}.installer_backup.${installer_backup_suffix}" "${x}" && \
+            run rm -f "${x}.installer_backup.${installer_backup_suffix}"
+    fi
+done
+
+
+# -----------------------------------------------------------------------------
+progress "Fix generated files permissions"
+
+run find ./system/ -type f -a \! -name \*.in -a \! -name Makefile\* -a \! -name \*.conf -a \! -name \*.service -a \! -name \*.logrotate -exec chmod 755 {} \;
+
+
+# -----------------------------------------------------------------------------
+progress "Add user netdata to required user groups"
+
+add_netdata_user_and_group || run_failed "The installer does not run as root."
+
+
+# -----------------------------------------------------------------------------
+progress "Install logrotate configuration for netdata"
+
+install_netdata_logrotate
+
+
+# -----------------------------------------------------------------------------
+progress "Read installation options from netdata.conf"
 
 # create an empty config if it does not exist
-[ ! -f "${NETDATA_PREFIX}/etc/netdata/netdata.conf" ] && touch "${NETDATA_PREFIX}/etc/netdata/netdata.conf"
+[ ! -f "${NETDATA_PREFIX}/etc/netdata/netdata.conf" ] && \
+    touch "${NETDATA_PREFIX}/etc/netdata/netdata.conf"
 
 # function to extract values from the config file
 config_option() {
-    local key="${1}" value="${2}" line=
+    local section="${1}" key="${2}" value="${3}"
 
     if [ -s "${NETDATA_PREFIX}/etc/netdata/netdata.conf" ]
         then
-        line="$( grep "^[[:space:]]*${key}[[:space:]]*=[[:space:]]*" "${NETDATA_PREFIX}/etc/netdata/netdata.conf" | head -n 1 )"
-        [ ! -z "${line}" ] && value="$( echo "${line}" | cut -d '=' -f 2 | sed -e "s/^[[:space:]]\+//g" -e "s/[[:space:]]\+$//g" )"
+        "${NETDATA_PREFIX}/usr/sbin/netdata" \
+            -c "${NETDATA_PREFIX}/etc/netdata/netdata.conf" \
+            -W get "${section}" "${key}" "${value}" || \
+            echo "${value}"
+    else
+        echo "${value}"
     fi
-
-    echo "${value}"
 }
 
 # the user netdata will run as
 if [ "${UID}" = "0" ]
     then
-    NETDATA_USER="$( config_option "run as user" "netdata" )"
+    NETDATA_USER="$( config_option "global" "run as user" "netdata" )"
 else
     NETDATA_USER="${USER}"
 fi
 
 # the owners of the web files
-NETDATA_WEB_USER="$(  config_option "web files owner" "${NETDATA_USER}" )"
-NETDATA_WEB_GROUP="$( config_option "web files group" "${NETDATA_WEB_USER}" )"
-
-# debug flags
-NETDATA_DEBUG="$( config_option "debug flags" 0 )"
+NETDATA_WEB_USER="$(  config_option "web" "web files owner" "${NETDATA_USER}" )"
+NETDATA_WEB_GROUP="$( config_option "web" "web files group" "${NETDATA_WEB_USER}" )"
 
 # port
 defport=19999
-NETDATA_PORT="$( config_option "default port" ${defport} )"
-NETDATA_PORT2="$( config_option "port" ${defport} )"
-
-if [ "${NETDATA_PORT}" != "${NETDATA_PORT2}" ]
-then
-    if [ "${NETDATA_PORT2}" != "${defport}" ]
-    then
-        NETDATA_PORT="${NETDATA_PORT2}"
-    fi
-fi
+NETDATA_PORT="$( config_option "web" "default port" ${defport} )"
 
 # directories
-NETDATA_LIB_DIR="$( config_option "lib directory" "${NETDATA_PREFIX}/var/lib/netdata" )"
-NETDATA_CACHE_DIR="$( config_option "cache directory" "${NETDATA_PREFIX}/var/cache/netdata" )"
-NETDATA_WEB_DIR="$( config_option "web files directory" "${NETDATA_PREFIX}/usr/share/netdata/web" )"
-NETDATA_LOG_DIR="$( config_option "log directory" "${NETDATA_PREFIX}/var/log/netdata" )"
-NETDATA_CONF_DIR="$( config_option "config directory" "${NETDATA_PREFIX}/etc/netdata" )"
+NETDATA_LIB_DIR="$( config_option "global" "lib directory" "${NETDATA_PREFIX}/var/lib/netdata" )"
+NETDATA_CACHE_DIR="$( config_option "global" "cache directory" "${NETDATA_PREFIX}/var/cache/netdata" )"
+NETDATA_WEB_DIR="$( config_option "global" "web files directory" "${NETDATA_PREFIX}/usr/share/netdata/web" )"
+NETDATA_LOG_DIR="$( config_option "global" "log directory" "${NETDATA_PREFIX}/var/log/netdata" )"
+NETDATA_CONF_DIR="$( config_option "global" "config directory" "${NETDATA_PREFIX}/etc/netdata" )"
 NETDATA_RUN_DIR="${NETDATA_PREFIX}/var/run"
 
 
 # -----------------------------------------------------------------------------
-# prepare the directories
+progress "Fix permissions of netdata directories (using user '${NETDATA_USER}')"
 
-# this is needed if NETDATA_PREFIX is not empty
 if [ ! -d "${NETDATA_RUN_DIR}" ]
     then
-    mkdir -p "${NETDATA_RUN_DIR}" || exit 1
+    # this is needed if NETDATA_PREFIX is not empty
+    run mkdir -p "${NETDATA_RUN_DIR}" || exit 1
 fi
-
-echo >&2
-echo >&2 "Fixing directories (user: ${NETDATA_USER})..."
 
 # --- conf dir ----
 
@@ -671,7 +701,7 @@ do
         run mkdir -p "${NETDATA_CONF_DIR}/${x}" || exit 1
     fi
 done
-run chown --recursive "${NETDATA_USER}:${NETDATA_USER}" "${NETDATA_CONF_DIR}"
+run chown -R "${NETDATA_USER}:${NETDATA_USER}" "${NETDATA_CONF_DIR}"
 run find "${NETDATA_CONF_DIR}" -type f -exec chmod 0660 {} \;
 run find "${NETDATA_CONF_DIR}" -type d -exec chmod 0775 {} \;
 
@@ -682,7 +712,7 @@ if [ ! -d "${NETDATA_WEB_DIR}" ]
     echo >&2 "Creating directory '${NETDATA_WEB_DIR}'"
     run mkdir -p "${NETDATA_WEB_DIR}" || exit 1
 fi
-run chown --recursive "${NETDATA_WEB_USER}:${NETDATA_WEB_GROUP}" "${NETDATA_WEB_DIR}"
+run chown -R "${NETDATA_WEB_USER}:${NETDATA_WEB_GROUP}" "${NETDATA_WEB_DIR}"
 run find "${NETDATA_WEB_DIR}" -type f -exec chmod 0664 {} \;
 run find "${NETDATA_WEB_DIR}" -type d -exec chmod 0775 {} \;
 
@@ -696,48 +726,91 @@ do
         run mkdir -p "${x}" || exit 1
     fi
 
-    run chown --recursive "${NETDATA_USER}:${NETDATA_USER}" "${x}"
+    run chown -R "${NETDATA_USER}:${NETDATA_USER}" "${x}"
     #run find "${x}" -type f -exec chmod 0660 {} \;
     #run find "${x}" -type d -exec chmod 0770 {} \;
 done
+
+run chmod 755 "${NETDATA_LOG_DIR}"
 
 # --- plugins ----
 
 if [ ${UID} -eq 0 ]
     then
-    run chown --recursive root:root "${NETDATA_PREFIX}/usr/libexec/netdata"
+    # find the admin group
+    admin_group=
+    test -z "${admin_group}" && getent group root >/dev/null 2>&1 && admin_group="root"
+    test -z "${admin_group}" && getent group daemon >/dev/null 2>&1 && admin_group="daemon"
+    test -z "${admin_group}" && admin_group="${NETDATA_USER}"
+
+    run chown "${NETDATA_USER}:${admin_group}" "${NETDATA_LOG_DIR}"
+    run chown -R root "${NETDATA_PREFIX}/usr/libexec/netdata"
     run find "${NETDATA_PREFIX}/usr/libexec/netdata" -type d -exec chmod 0755 {} \;
     run find "${NETDATA_PREFIX}/usr/libexec/netdata" -type f -exec chmod 0644 {} \;
     run find "${NETDATA_PREFIX}/usr/libexec/netdata" -type f -a -name \*.plugin -exec chmod 0755 {} \;
     run find "${NETDATA_PREFIX}/usr/libexec/netdata" -type f -a -name \*.sh -exec chmod 0755 {} \;
 
-    run setcap cap_dac_read_search,cap_sys_ptrace+ep "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin"
-    if [ $? -ne 0 ]
+    setcap_ret=1
+    if ! iscontainer
+        then
+        if [ ! -z "${setcap}" ]
+            then
+            run setcap cap_dac_read_search,cap_sys_ptrace+ep "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin"
+            setcap_ret=$?
+        fi
+
+        if [ ${setcap_ret} -eq 0 ]
+            then
+            # if we managed to setcap
+            # but we fail to execute apps.plugin
+            # trigger setuid to root
+            "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin" -t >/dev/null 2>&1
+            setcap_ret=$?
+        fi
+    fi
+
+    if [ ${setcap_ret} -ne 0 ]
         then
         # fix apps.plugin to be setuid to root
         run chown root "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin"
         run chmod 4755 "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin"
     fi
+
+    if [ -f "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/freeipmi.plugin" ]
+        then
+        run chown root "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/freeipmi.plugin"
+        run chmod 4755 "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/freeipmi.plugin"
+    fi
+
 else
-    run chown --recursive "${NETDATA_USER}:${NETDATA_USER}" "${NETDATA_PREFIX}/usr/libexec/netdata"
+    run chown "${NETDATA_USER}:${NETDATA_USER}" "${NETDATA_LOG_DIR}"
+    run chown -R "${NETDATA_USER}:${NETDATA_USER}" "${NETDATA_PREFIX}/usr/libexec/netdata"
     run find "${NETDATA_PREFIX}/usr/libexec/netdata" -type f -exec chmod 0755 {} \;
     run find "${NETDATA_PREFIX}/usr/libexec/netdata" -type d -exec chmod 0755 {} \;
 fi
 
 # --- fix #1292 bug ---
 
-[ -d "${NETDATA_PREFIX}/usr/libexec" ] && run chmod a+rX "${NETDATA_PREFIX}/usr/libexec"
+[ -d "${NETDATA_PREFIX}/usr/libexec" ]       && run chmod a+rX "${NETDATA_PREFIX}/usr/libexec"
 [ -d "${NETDATA_PREFIX}/usr/share/netdata" ] && run chmod a+rX "${NETDATA_PREFIX}/usr/share/netdata"
+
+
+
+# -----------------------------------------------------------------------------
+progress "Install netdata at system init"
+
+NETDATA_START_CMD="${NETDATA_PREFIX}/usr/sbin/netdata"
+install_netdata_service || run_failed "Cannot install netdata init service."
 
 
 # -----------------------------------------------------------------------------
 # check if we can re-start netdata
 
+started=0
 if [ ${DONOTSTART} -eq 1 ]
     then
     if [ ! -s "${NETDATA_PREFIX}/etc/netdata/netdata.conf" ]
         then
-        echo >&2 "Generating empty config file in: ${NETDATA_PREFIX}/etc/netdata/netdata.conf"
         echo "# Get config from http://127.0.0.1:${NETDATA_PORT}/netdata.conf" >"${NETDATA_PREFIX}/etc/netdata/netdata.conf"
 
         if [ "${UID}" -eq 0 ]
@@ -746,270 +819,82 @@ if [ ${DONOTSTART} -eq 1 ]
         fi
         chmod 0644 "${NETDATA_PREFIX}/etc/netdata/netdata.conf"
     fi
-    banner "is installed now!"
-    echo >&2 "  enjoy real-time performance and health monitoring..."
-    exit 0
-fi
 
-# -----------------------------------------------------------------------------
-# stop a running netdata
-
-isnetdata() {
-    [ -z "$1" -o ! -f "/proc/$1/stat" ] && return 1
-    [ "$(cat "/proc/$1/stat" | cut -d '(' -f 2 | cut -d ')' -f 1)" = "netdata" ] && return 0
-    return 1
-}
-
-stop_netdata_on_pid() {
-    local pid="${1}" ret=0 count=0
-
-    isnetdata ${pid} || return 0
-
-    printf >&2 "Stopping netdata on pid ${pid} ..."
-    while [ ! -z "$pid" -a ${ret} -eq 0 ]
-    do
-        if [ ${count} -gt 45 ]
-            then
-            echo >&2 "Cannot stop the running netdata on pid ${pid}."
-            return 1
-        fi
-
-        count=$(( count + 1 ))
-
-        run kill ${pid} 2>/dev/null
-        ret=$?
-
-        test ${ret} -eq 0 && printf >&2 "." && sleep 2
-    done
-
-    echo >&2
-    if [ ${ret} -eq 0 ]
-    then
-        echo >&2 "SORRY! CANNOT STOP netdata ON PID ${pid} !"
-        return 1
-    fi
-
-    echo >&2 "netdata on pid ${pid} stopped."
-    return 0
-}
-
-stop_all_netdata() {
-    local p myns ns
-
-    myns="$(readlink /proc/self/ns/pid 2>/dev/null)"
-
-    echo >&2 "Stopping a (possibly) running netdata..."
-
-    for p in $(cat "${NETDATA_RUN_DIR}/netdata.pid" 2>/dev/null) \
-        $(cat /var/run/netdata.pid 2>/dev/null) \
-        $(cat /var/run/netdata/netdata.pid 2>/dev/null) \
-        $(pidof netdata 2>/dev/null)
-    do
-        ns="$(readlink /proc/${p}/ns/pid 2>/dev/null)"
-
-        if [ -z "${myns}" -o -z "${ns}" -o "${myns}" = "${ns}" ]
-            then
-            stop_netdata_on_pid ${p}
-        fi
-    done
-}
-
-# -----------------------------------------------------------------------------
-# check for systemd
-
-issystemd() {
-    local pids p myns ns systemctl
-
-    # if the directory /etc/systemd/system does not exit, it is not systemd
-    [ ! -d /etc/systemd/system ] && return 1
-
-    # if there is no systemctl command, it is not systemd
-    systemctl=$(which systemctl 2>/dev/null || command -v systemctl 2>/dev/null)
-    [ -z "${systemctl}" -o ! -x "${systemctl}" ] && return 1
-
-    # if pid 1 is systemd, it is systemd
-    [ "$(basename $(readlink /proc/1/exe) 2>/dev/null)" = "systemd" ] && return 0
-
-    # if systemd is not running, it is not systemd
-    pids=$(pidof systemd 2>/dev/null)
-    [ -z "${pids}" ] && return 1
-
-    # check if the running systemd processes are not in our namespace
-    myns="$(readlink /proc/self/ns/pid 2>/dev/null)"
-    for p in ${pids}
-    do
-        ns="$(readlink /proc/${p}/ns/pid 2>/dev/null)"
-
-        # if pid of systemd is in our namespace, it is systemd
-        [ ! -z "${myns}" && "${myns}" = "${ns}" ] && return 0
-    done
-
-    # else, it is not systemd
-    return 1
-}
-
-installed_init_d=0
-install_non_systemd_init() {
-    [ "${UID}" != 0 ] && return 1
-
-    local key="unknown"
-    if [ -f /etc/os-release ]
-        then
-        source /etc/os-release || return 1
-        key="${ID}-${VERSION_ID}"
-
-    elif [ -f /etc/centos-release ]
-        then
-        key=$(</etc/centos-release)
-    fi
-
-    if [ -d /etc/init.d -a ! -f /etc/init.d/netdata ]
-        then
-        if [ "${key}" = "gentoo" ]
-            then
-            run cp system/netdata-openrc /etc/init.d/netdata && \
-            run chmod 755 /etc/init.d/netdata && \
-            run rc-update add netdata default && \
-            installed_init_d=1
-        
-        elif [ "${key}" = "ubuntu-12.04" -o "${key}" = "ubuntu-14.04" -o "${key}" = "debian-7" ]
-            then
-            run cp system/netdata-lsb /etc/init.d/netdata && \
-            run chmod 755 /etc/init.d/netdata && \
-            run update-rc.d netdata defaults && \
-            run update-rc.d netdata enable && \
-            installed_init_d=1
-
-        elif [ "${key}" = "CentOS release 6.8 (Final)" ]
-            then
-            run cp system/netdata-init-d /etc/init.d/netdata && \
-            run chmod 755 /etc/init.d/netdata && \
-            run chkconfig netdata on && \
-            installed_init_d=1
-        fi
-    fi
-
-    return 0
-}
-
-started=0
-if [ "${UID}" -eq 0 ]
-    then
-
-    if issystemd
-    then
-        # systemd is running on this system
-
-        if [ ! -f /etc/systemd/system/netdata.service ]
-        then
-            echo >&2 "Installing systemd service..."
-            run cp system/netdata.service /etc/systemd/system/netdata.service && \
-                run systemctl daemon-reload && \
-                run systemctl enable netdata
-        else
-            service netdata stop
-        fi
-
-        stop_all_netdata
-        service netdata restart && started=1
-    else
-        install_non_systemd_init
-    fi
-
-    if [ ${started} -eq 0 ]
-    then
-        # check if we can use the system service
-        service netdata stop
-        stop_all_netdata
-        service netdata restart && started=1
-        if [ ${started} -eq 0 ]
-        then
-            service netdata start && started=1
-        fi
-    fi
-fi
-
-if [ ${started} -eq 0 ]
-then
-    # still not started...
-
-    stop_all_netdata
-
-    echo >&2 "Starting netdata..."
-    run ${NETDATA_PREFIX}/usr/sbin/netdata -P ${NETDATA_RUN_DIR}/netdata.pid "${@}"
+else
+    restart_netdata ${NETDATA_PREFIX}/usr/sbin/netdata "${@}"
     if [ $? -ne 0 ]
         then
         echo >&2
         echo >&2 "SORRY! FAILED TO START NETDATA!"
+        echo >&2
         exit 1
-    else
-        echo >&2 "OK. NetData Started!"
     fi
 
+    started=1
+    echo >&2 "OK. NetData Started!"
     echo >&2
-fi
 
-# -----------------------------------------------------------------------------
-# save a config file, if it is not already there
+    # -----------------------------------------------------------------------------
+    # save a config file, if it is not already there
 
-if [ ! -s "${NETDATA_PREFIX}/etc/netdata/netdata.conf" ]
-    then
-    echo >&2
-    echo >&2 "-------------------------------------------------------------------------------"
-    echo >&2
-    echo >&2 "Downloading default configuration from netdata..."
-    sleep 5
-
-    # remove a possibly obsolete download
-    [ -f "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" ] && rm "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new"
-
-    # disable a proxy to get data from the local netdata
-    export http_proxy=
-    export https_proxy=
-
-    # try wget
-    wget 2>/dev/null -O "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" "http://localhost:${NETDATA_PORT}/netdata.conf"
-    ret=$?
-
-    # try curl
-    if [ ${ret} -ne 0 -o ! -s "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" ]
+    if [ ! -s "${NETDATA_PREFIX}/etc/netdata/netdata.conf" ]
         then
-        curl -s -o "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" "http://localhost:${NETDATA_PORT}/netdata.conf"
-        ret=$?
-    fi
+        echo >&2
+        echo >&2 "-------------------------------------------------------------------------------"
+        echo >&2
+        echo >&2 "Downloading default configuration from netdata..."
+        sleep 5
 
-    if [ ${ret} -eq 0 -a -s "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" ]
-        then
-        mv "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" "${NETDATA_PREFIX}/etc/netdata/netdata.conf"
-        echo >&2 "New configuration saved for you to edit at ${NETDATA_PREFIX}/etc/netdata/netdata.conf"
-
-        if [ "${UID}" -eq 0 ]
-            then
-            chown "${NETDATA_USER}" "${NETDATA_PREFIX}/etc/netdata/netdata.conf"
-        fi
-        chmod 0664 "${NETDATA_PREFIX}/etc/netdata/netdata.conf"
-    else
-        echo >&2 "Cannnot download configuration from netdata daemon using url 'http://localhost:${NETDATA_PORT}/netdata.conf'"
+        # remove a possibly obsolete download
         [ -f "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" ] && rm "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new"
+
+        # disable a proxy to get data from the local netdata
+        export http_proxy=
+        export https_proxy=
+
+        # try wget
+        wget 2>/dev/null -O "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" "http://localhost:${NETDATA_PORT}/netdata.conf"
+        ret=$?
+
+        # try curl
+        if [ ${ret} -ne 0 -o ! -s "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" ]
+            then
+            curl -s -o "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" "http://localhost:${NETDATA_PORT}/netdata.conf"
+            ret=$?
+        fi
+
+        if [ ${ret} -eq 0 -a -s "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" ]
+            then
+            mv "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" "${NETDATA_PREFIX}/etc/netdata/netdata.conf"
+            echo >&2 "New configuration saved for you to edit at ${NETDATA_PREFIX}/etc/netdata/netdata.conf"
+
+            if [ "${UID}" -eq 0 ]
+                then
+                chown "${NETDATA_USER}" "${NETDATA_PREFIX}/etc/netdata/netdata.conf"
+            fi
+            chmod 0664 "${NETDATA_PREFIX}/etc/netdata/netdata.conf"
+        else
+            echo >&2 "Cannnot download configuration from netdata daemon using url 'http://localhost:${NETDATA_PORT}/netdata.conf'"
+            [ -f "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new" ] && rm "${NETDATA_PREFIX}/etc/netdata/netdata.conf.new"
+        fi
     fi
 fi
 
 # -----------------------------------------------------------------------------
-# Check for KSM
+progress "Check KSM (kernel memory deduper)"
 
 ksm_is_available_but_disabled() {
     cat <<KSM1
 
--------------------------------------------------------------------------------
-Memory de-duplication instructions
+${TPUT_BOLD}Memory de-duplication instructions${TPUT_RESET}
 
 You have kernel memory de-duper (called Kernel Same-page Merging,
 or KSM) available, but it is not currently enabled.
 
 To enable it run:
 
-echo 1 >/sys/kernel/mm/ksm/run
-echo 1000 >/sys/kernel/mm/ksm/sleep_millisecs
+    ${TPUT_YELLOW}${TPUT_BOLD}echo 1 >/sys/kernel/mm/ksm/run${TPUT_RESET}
+    ${TPUT_YELLOW}${TPUT_BOLD}echo 1000 >/sys/kernel/mm/ksm/sleep_millisecs${TPUT_RESET}
 
 If you enable it, you will save 40-60% of netdata memory.
 
@@ -1019,8 +904,7 @@ KSM1
 ksm_is_not_available() {
     cat <<KSM2
 
--------------------------------------------------------------------------------
-Memory de-duplication not present in your kernel
+${TPUT_BOLD}Memory de-duplication not present in your kernel${TPUT_RESET}
 
 It seems you do not have kernel memory de-duper (called Kernel Same-page
 Merging, or KSM) available.
@@ -1043,14 +927,13 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Check for version.txt
+progress "Check version.txt"
 
 if [ ! -s web/version.txt ]
     then
     cat <<VERMSG
 
--------------------------------------------------------------------------------
-Version update check warning
+${TPUT_BOLD}Version update check warning${TPUT_RESET}
 
 The way you downloaded netdata, we cannot find its version. This means the
 Update check on the dashboard, will not work.
@@ -1064,14 +947,13 @@ VERMSG
 fi
 
 # -----------------------------------------------------------------------------
-# apps.plugin warning
+progress "Check apps.plugin"
 
 if [ "${UID}" -ne 0 ]
     then
     cat <<SETUID_WARNING
 
--------------------------------------------------------------------------------
-apps.plugin needs privileges
+${TPUT_BOLD}apps.plugin needs privileges${TPUT_RESET}
 
 Since you have installed netdata as a normal user, to have apps.plugin collect
 all the needed data, you have to give it the access rights it needs, by running
@@ -1079,14 +961,14 @@ either of the following sets of commands:
 
 To run apps.plugin with escalated capabilities:
 
-    sudo chown root:${NETDATA_USER} "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin"
-    sudo chmod 0750 "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin"
-    sudo setcap cap_dac_read_search,cap_sys_ptrace+ep "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin"
+    ${TPUT_YELLOW}${TPUT_BOLD}sudo chown root:${NETDATA_USER} \"${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin\"${TPUT_RESET}
+    ${TPUT_YELLOW}${TPUT_BOLD}sudo chmod 0750 \"${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin\"${TPUT_RESET}
+    ${TPUT_YELLOW}${TPUT_BOLD}sudo setcap cap_dac_read_search,cap_sys_ptrace+ep \"${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin\"${TPUT_RESET}
 
 or, to run apps.plugin as root:
 
-    sudo chown root "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin"
-    sudo chmod 4755 "${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin"
+    ${TPUT_YELLOW}${TPUT_BOLD}sudo chown root \"${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin\"${TPUT_RESET}
+    ${TPUT_YELLOW}${TPUT_BOLD}sudo chmod 4755 \"${NETDATA_PREFIX}/usr/libexec/netdata/plugins.d/apps.plugin\"${TPUT_RESET}
 
 apps.plugin is performing a hard-coded function of data collection for all
 running processes. It cannot be instructed from the netdata daemon to perform
@@ -1096,7 +978,7 @@ SETUID_WARNING
 fi
 
 # -----------------------------------------------------------------------------
-# Keep un-install info
+progress "Generate netdata-uninstaller.sh"
 
 cat >netdata-uninstaller.sh <<UNINSTALL
 #!/usr/bin/env bash
@@ -1191,36 +1073,93 @@ if [ $? -eq 0 -a "${NETDATA_ADDED_TO_DOCKER}" = "1" ]
     echo "   gpasswd -d netdata docker"
 fi
 
+getent group nginx > /dev/null
+if [ $? -eq 0 -a "${NETDATA_ADDED_TO_NGINX}" = "1" ]
+    then
+    echo
+    echo "You may also want to remove the netdata user from the nginx group"
+    echo "by running:"
+    echo "   gpasswd -d netdata nginx"
+fi
+
+getent group varnish > /dev/null
+if [ $? -eq 0 -a "${NETDATA_ADDED_TO_VARNISH}" = "1" ]
+    then
+    echo
+    echo "You may also want to remove the netdata user from the varnish group"
+    echo "by running:"
+    echo "   gpasswd -d netdata varnish"
+fi
+
+getent group haproxy > /dev/null
+if [ $? -eq 0 -a "${NETDATA_ADDED_TO_HAPROXY}" = "1" ]
+    then
+    echo
+    echo "You may also want to remove the netdata user from the haproxy group"
+    echo "by running:"
+    echo "   gpasswd -d netdata haproxy"
+fi
+
+getent group adm > /dev/null
+if [ $? -eq 0 -a "${NETDATA_ADDED_TO_ADM}" = "1" ]
+    then
+    echo
+    echo "You may also want to remove the netdata user from the adm group"
+    echo "by running:"
+    echo "   gpasswd -d netdata adm"
+fi
+
+getent group nsd > /dev/null
+if [ $? -eq 0 -a "${NETDATA_ADDED_TO_NSD}" = "1" ]
+    then
+    echo
+    echo "You may also want to remove the netdata user from the nsd group"
+    echo "by running:"
+    echo "   gpasswd -d netdata nsd"
+fi
+
+getent group proxy > /dev/null
+if [ $? -eq 0 -a "${NETDATA_ADDED_TO_PROXY}" = "1" ]
+    then
+    echo
+    echo "You may also want to remove the netdata user from the proxy group"
+    echo "by running:"
+    echo "   gpasswd -d netdata proxy"
+fi
+
+getent group squid > /dev/null
+if [ $? -eq 0 -a "${NETDATA_ADDED_TO_SQUID}" = "1" ]
+    then
+    echo
+    echo "You may also want to remove the netdata user from the squid group"
+    echo "by running:"
+    echo "   gpasswd -d netdata squid"
+fi
+
 UNINSTALL
 chmod 750 netdata-uninstaller.sh
 
 # -----------------------------------------------------------------------------
+progress "Basic netdata instructions"
 
 cat <<END
 
-
--------------------------------------------------------------------------------
-
-OK. NetData is installed and it is running.
-
--------------------------------------------------------------------------------
-
-By default netdata listens on all IPs on port ${NETDATA_PORT},
+netdata by default listens on all IPs on port ${NETDATA_PORT},
 so you can access it with:
 
-http://this.machine.ip:${NETDATA_PORT}/
+  ${TPUT_CYAN}${TPUT_BOLD}http://this.machine.ip:${NETDATA_PORT}/${TPUT_RESET}
 
-To stop netdata, just kill it, with:
+To stop netdata run:
 
-  killall netdata
+  ${TPUT_YELLOW}${TPUT_BOLD}${NETDATA_STOP_CMD}${TPUT_RESET}
 
-To start it, just run it:
+To start netdata run:
 
-  ${NETDATA_PREFIX}/usr/sbin/netdata
+  ${TPUT_YELLOW}${TPUT_BOLD}${NETDATA_START_CMD}${TPUT_RESET}
 
 
 END
-echo >&2 "Uninstall script generated: ./netdata-uninstaller.sh"
+echo >&2 "Uninstall script generated: ${TPUT_RED}${TPUT_BOLD}./netdata-uninstaller.sh${TPUT_RESET}"
 
 if [ -d .git ]
     then
@@ -1232,7 +1171,10 @@ force=0
 
 export PATH="\${PATH}:${PATH}"
 export CFLAGS="${CFLAGS}"
+export NETDATA_CONFIGURE_OPTIONS="${NETDATA_CONFIGURE_OPTIONS}"
 
+# make sure we have a UID
+[ -z "\${UID}" ] && UID="\$(id -u)"
 INSTALL_UID="${UID}"
 if [ "\${INSTALL_UID}" != "\${UID}" ]
     then
@@ -1260,7 +1202,7 @@ if [ -t 2 ]
 else
     # we are headless
     # create a temporary file for the log
-    tmp=\$(mktemp /tmp/netdata-updater-log-XXXXXX.log)
+    tmp=\$(mktemp /tmp/netdata-updater.log.XXXXXX)
     # open fd 3 and send it to tmp
     exec 3>\${tmp}
 fi
@@ -1290,10 +1232,7 @@ failed() {
 }
 
 get_latest_commit_id() {
-    git log -1           2>&3 |\\
-        grep ^commit     2>&3 |\\
-        head -n 1        2>&3 |\\
-        cut -d ' ' -f 2  2>&3
+	git rev-parse HEAD 2>&3
 }
 
 update() {
@@ -1323,7 +1262,7 @@ update() {
 
     emptyline
     info "Re-installing netdata..."
-    ${REINSTALL_COMMAND// --dont-wait/} --dont-wait >&3 2>&3 || failed "FAILED TO COMPILE/INSTALL NETDATA"
+    ${REINSTALL_COMMAND} --dont-wait >&3 2>&3 || failed "FAILED TO COMPILE/INSTALL NETDATA"
 
     [ ! -z "\${tmp}" ] && rm "\${tmp}" && tmp=
     return 0
@@ -1336,13 +1275,63 @@ update && exit 0
 REINSTALL
     chmod 755 netdata-updater.sh.new
     mv -f netdata-updater.sh.new netdata-updater.sh
-    echo >&2 "Update script generated   : ./netdata-updater.sh"
-elif [ -f "netdata-updater.sh" ]
+    echo >&2 "Update script generated   : ${TPUT_GREEN}${TPUT_BOLD}./netdata-updater.sh${TPUT_RESET}"
+    echo >&2
+    echo >&2 "${TPUT_DIM}${TPUT_BOLD}netdata-updater.sh${TPUT_RESET}${TPUT_DIM} can work from cron. It will trigger an email from cron"
+    echo >&2 "only if it fails (it does not print anything when it can update netdata).${TPUT_RESET}"
+    if [ "${UID}" -eq "0" ]
     then
-    rm "netdata-updater.sh"
+        crondir=
+        [ -d "/etc/periodic/daily" ] && crondir="/etc/periodic/daily"
+        [ -d "/etc/cron.daily" ] && crondir="/etc/cron.daily"
+
+        if [ ! -z "${crondir}" ]
+        then
+            if [ -f "${crondir}/netdata-updater.sh" -a ! -f "${crondir}/netdata-updater" ]
+            then
+                # remove .sh from the filename under cron
+                progress "Fixing netdata-updater filename at cron"
+                mv -f "${crondir}/netdata-updater.sh" "${crondir}/netdata-updater"
+            fi
+
+            if [ ! -f "${crondir}/netdata-updater" ]
+            then
+                if [ "${AUTOUPDATE}" = "1" ]
+                then
+                    progress "Installing netdata-updater at cron"
+                    run ln -s "${PWD}/netdata-updater.sh" "${crondir}/netdata-updater"
+                else
+                    echo >&2 "${TPUT_DIM}Run this to automatically check and install netdata updates once per day:${TPUT_RESET}"
+                    echo >&2
+                    echo >&2 "${TPUT_YELLOW}${TPUT_BOLD}sudo ln -s ${PWD}/netdata-updater.sh ${crondir}/netdata-updater${TPUT_RESET}"
+                fi
+            else
+                progress "Refreshing netdata-updater at cron"
+                run rm "${crondir}/netdata-updater"
+                run ln -s "${PWD}/netdata-updater.sh" "${crondir}/netdata-updater"
+            fi
+        else
+            [ "${AUTOUPDATE}" = "1" ] && echo >&2 "Cannot figure out the cron directory to install netdata-updater."
+        fi
+    else
+        [ "${AUTOUPDATE}" = "1" ] && echo >&2 "You need to run the installer as root for auto-updating via cron."
+    fi
+else
+    [ -f "netdata-updater.sh" ] && rm "netdata-updater.sh"
+    [ "${AUTOUPDATE}" = "1" ] && echo >&2 "Your installation method does not support daily auto-updating via cron."
 fi
 
-banner "is installed and running now!"
+# -----------------------------------------------------------------------------
+echo >&2
+progress "We are done!"
+
+if [ ${started} -eq 1 ]
+    then
+    netdata_banner "is installed and running now!"
+else
+    netdata_banner "is installed now!"
+fi
+
 echo >&2 "  enjoy real-time performance and health monitoring..."
 echo >&2 
 exit 0

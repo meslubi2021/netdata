@@ -2,7 +2,6 @@
 #define NETDATA_RRD2JSON_H 1
 
 #define HOSTNAME_MAX 1024
-extern char *hostname;
 
 #define API_RELATIVE_TIME_MAX (3 * 365 * 86400)
 
@@ -32,6 +31,16 @@ extern char *hostname;
 #define DATASOURCE_FORMAT_SSV_COMMA "ssvcomma"
 #define DATASOURCE_FORMAT_CSV_JSON_ARRAY "csvjsonarray"
 
+#define ALLMETRICS_FORMAT_SHELL                 "shell"
+#define ALLMETRICS_FORMAT_PROMETHEUS            "prometheus"
+#define ALLMETRICS_FORMAT_PROMETHEUS_ALL_HOSTS  "prometheus_all_hosts"
+#define ALLMETRICS_FORMAT_JSON                  "json"
+
+#define ALLMETRICS_SHELL                        1
+#define ALLMETRICS_PROMETHEUS                   2
+#define ALLMETRICS_JSON                         3
+#define ALLMETRICS_PROMETHEUS_ALL_HOSTS         4
+
 #define GROUP_UNDEFINED         0
 #define GROUP_AVERAGE           1
 #define GROUP_MIN               2
@@ -54,17 +63,19 @@ extern char *hostname;
 #define RRDR_OPTION_NOT_ALIGNED     0x00001000 // do not align charts for persistant timeframes
 
 extern void rrd_stats_api_v1_chart(RRDSET *st, BUFFER *wb);
-extern void rrd_stats_api_v1_charts(BUFFER *wb);
+extern void rrd_stats_api_v1_charts(RRDHOST *host, BUFFER *wb);
 
-extern unsigned long rrd_stats_one_json(RRDSET *st, char *options, BUFFER *wb);
+extern void rrd_stats_api_v1_charts_allmetrics_json(RRDHOST *host, BUFFER *wb);
+extern void rrd_stats_api_v1_charts_allmetrics_shell(RRDHOST *host, BUFFER *wb);
+extern void rrd_stats_api_v1_charts_allmetrics_prometheus(RRDHOST *host, BUFFER *wb, int help, int types);
+extern void rrd_stats_api_v1_charts_allmetrics_prometheus_all_hosts(BUFFER *wb, int help, int types);
 
-extern void rrd_stats_graph_json(RRDSET *st, char *options, BUFFER *wb);
+extern int rrdset2anything_api_v1(RRDSET *st, BUFFER *out, BUFFER *dimensions, uint32_t format, long points
+                            , long long after, long long before, int group_method, uint32_t options
+                            , time_t *latest_timestamp);
 
-extern void rrd_stats_all_json(BUFFER *wb);
-
-extern time_t rrd_stats_json(int type, RRDSET *st, BUFFER *wb, long entries_to_show, long group, int group_method, time_t after, time_t before, int only_non_zero);
-
-extern int rrd2format(RRDSET *st, BUFFER *out, BUFFER *dimensions, uint32_t format, long points, long long after, long long before, int group_method, uint32_t options, time_t *latest_timestamp);
-extern int rrd2value(RRDSET *st, BUFFER *wb, calculated_number *n, const char *dimensions, long points, long long after, long long before, int group_method, uint32_t options, time_t *db_before, time_t *db_after, int *value_is_null);
+extern int rrdset2value_api_v1(RRDSET *st, BUFFER *wb, calculated_number *n, const char *dimensions, long points
+                            , long long after, long long before, int group_method, uint32_t options
+                            , time_t *db_before, time_t *db_after, int *value_is_null);
 
 #endif /* NETDATA_RRD2JSON_H */

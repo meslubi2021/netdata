@@ -1,9 +1,28 @@
 #include "common.h"
 
-char *global_host_prefix = "";
+#ifdef __APPLE__
+#define INHERIT_NONE 0
+#endif /* __APPLE__ */
+#if defined(__FreeBSD__) || defined(__APPLE__)
+#    define O_NOATIME     0
+#    define MADV_DONTFORK INHERIT_NONE
+#endif /* __FreeBSD__ || __APPLE__*/
+
+char *netdata_configured_hostname    = NULL;
+char *netdata_configured_config_dir  = NULL;
+char *netdata_configured_log_dir     = NULL;
+char *netdata_configured_plugins_dir = NULL;
+char *netdata_configured_web_dir     = NULL;
+char *netdata_configured_cache_dir   = NULL;
+char *netdata_configured_varlib_dir  = NULL;
+char *netdata_configured_home_dir    = NULL;
+char *netdata_configured_host_prefix = NULL;
+
 int enable_ksm = 1;
 
 volatile sig_atomic_t netdata_exit = 0;
+const char *os_type = NETDATA_OS_TYPE;
+const char *program_version = VERSION;
 
 // ----------------------------------------------------------------------------
 // memory allocation functions that handle failures
@@ -192,27 +211,29 @@ void freez(void *ptr) {
     free(ptr);
 }
 
-// ----------------------------------------------------------------------------
-// time functions
+void json_escape_string(char *dst, const char *src, size_t size) {
+    const char *t;
+    char *d = dst, *e = &dst[size - 1];
 
-inline unsigned long long timeval_usec(struct timeval *tv) {
-    return tv->tv_sec * 1000000ULL + tv->tv_usec;
+    for(t = src; *t && d < e ;t++) {
+        if(unlikely(*t == '\\' || *t == '"')) {
+            if(unlikely(d + 1 >= e)) break;
+            *d++ = '\\';
+        }
+        *d++ = *t;
+    }
+
+    *d = '\0';
 }
 
-// time(NULL) in nanoseconds
-inline unsigned long long time_usec(void) {
-    struct timeval now;
-    gettimeofday(&now, NULL);
-    return timeval_usec(&now);
+void json_fix_string(char *s) {
+    for( ; *s ;s++) {
+        if(unlikely(*s == '\\')) *s = '/';
+        else if(unlikely(*s == '"')) *s = '\'';
+    }
 }
 
-inline unsigned long long usec_dt(struct timeval *now, struct timeval *old) {
-    unsigned long long tv1 = timeval_usec(now);
-    unsigned long long tv2 = timeval_usec(old);
-    return (tv1 > tv2) ? (tv1 - tv2) : (tv2 - tv1);
-}
-
-int sleep_usec(unsigned long long usec) {
+int sleep_usec(usec_t usec) {
 
 #ifndef NETDATA_WITH_USLEEP
     // we expect microseconds (1.000.000 per second)
@@ -804,7 +825,7 @@ uint32_t simple_hash(const char *name)
 }
 */
 
-
+/*
 // http://isthe.com/chongo/tech/comp/fnv/#FNV-1a
 uint32_t simple_hash(const char *name) {
     unsigned char *s = (unsigned char *) name;
@@ -839,6 +860,7 @@ uint32_t simple_uhash(const char *name) {
     }
     return hval;
 }
+*/
 
 /*
 // http://eternallyconfuzzled.com/tuts/algorithms/jsw_tut_hashing.aspx
@@ -880,9 +902,8 @@ char *mystrsep(char **ptr, char *s) {
 
 char *trim(char *s) {
     // skip leading spaces
-    // and 'comments' as well!?
     while (*s && isspace(*s)) s++;
-    if (!*s || *s == '#') return NULL;
+    if (!*s) return NULL;
 
     // skip tailing spaces
     // this way is way faster. Writes only one NUL char.
@@ -898,102 +919,163 @@ char *trim(char *s) {
     return s;
 }
 
-void *mymmap(const char *filename, size_t size, int flags, int ksm) {
-    static int log_madvise_1 = 1;
-#ifdef MADV_MERGEABLE
-    static int log_madvise_2 = 1, log_madvise_3 = 1;
-#endif
-    void *mem = NULL;
+inline char *trim_all(char *buffer) {
+    char *d = buffer, *s = buffer;
 
-    errno = 0;
+    // skip spaces
+    while(isspace(*s)) s++;
+
+    while(*s) {
+        // copy the non-space part
+        while(*s && !isspace(*s)) *d++ = *s++;
+
+        // add a space if we have to
+        if(*s && isspace(*s)) {
+            *d++ = ' ';
+            s++;
+        }
+
+        // skip spaces
+        while(isspace(*s)) s++;
+    }
+
+    *d = '\0';
+
+    if(d > buffer) {
+        d--;
+        if(isspace(*d)) *d = '\0';
+    }
+
+    if(!buffer[0]) return NULL;
+    return buffer;
+}
+
+static int memory_file_open(const char *filename, size_t size) {
+    // info("memory_file_open('%s', %zu", filename, size);
+
     int fd = open(filename, O_RDWR | O_CREAT | O_NOATIME, 0664);
     if (fd != -1) {
         if (lseek(fd, size, SEEK_SET) == (off_t) size) {
             if (write(fd, "", 1) == 1) {
                 if (ftruncate(fd, size))
                     error("Cannot truncate file '%s' to size %zu. Will use the larger file.", filename, size);
-
-#ifdef MADV_MERGEABLE
-                if (flags & MAP_SHARED || !enable_ksm || !ksm) {
-#endif
-                    mem = mmap(NULL, size, PROT_READ | PROT_WRITE, flags, fd, 0);
-                    if (mem == MAP_FAILED) {
-                        error("Cannot allocate SHARED memory for file '%s'.", filename);
-                        mem = NULL;
-                    }
-                    else {
-#ifdef NETDATA_LOG_ALLOCATIONS
-                        mmap_accounting(size);
-#endif
-                        int advise = MADV_SEQUENTIAL | MADV_DONTFORK;
-                        if (flags & MAP_SHARED) advise |= MADV_WILLNEED;
-
-                        if (madvise(mem, size, advise) != 0 && log_madvise_1) {
-                            error("Cannot advise the kernel about the memory usage of file '%s'.", filename);
-                            log_madvise_1--;
-                        }
-                    }
-#ifdef MADV_MERGEABLE
-                }
-                else {
-/*
-                    // test - load the file into memory
-                    mem = calloc(1, size);
-                    if(mem) {
-                        if(lseek(fd, 0, SEEK_SET) == 0) {
-                            if(read(fd, mem, size) != (ssize_t)size)
-                                error("Cannot read from file '%s'", filename);
-                        }
-                        else
-                            error("Cannot seek to beginning of file '%s'.", filename);
-                    }
-*/
-                    mem = mmap(NULL, size, PROT_READ | PROT_WRITE, flags | MAP_ANONYMOUS, -1, 0);
-                    if (mem == MAP_FAILED) {
-                        error("Cannot allocate PRIVATE ANONYMOUS memory for KSM for file '%s'.", filename);
-                        mem = NULL;
-                    }
-                    else {
-#ifdef NETDATA_LOG_ALLOCATIONS
-                        mmap_accounting(size);
-#endif
-                        if (lseek(fd, 0, SEEK_SET) == 0) {
-                            if (read(fd, mem, size) != (ssize_t) size)
-                                error("Cannot read from file '%s'", filename);
-                        } else
-                            error("Cannot seek to beginning of file '%s'.", filename);
-
-                        // don't use MADV_SEQUENTIAL|MADV_DONTFORK, they disable MADV_MERGEABLE
-                        if (madvise(mem, size, MADV_SEQUENTIAL | MADV_DONTFORK) != 0 && log_madvise_2) {
-                            error("Cannot advise the kernel about the memory usage (MADV_SEQUENTIAL|MADV_DONTFORK) of file '%s'.",
-                                  filename);
-                            log_madvise_2--;
-                        }
-
-                        if (madvise(mem, size, MADV_MERGEABLE) != 0 && log_madvise_3) {
-                            error("Cannot advise the kernel about the memory usage (MADV_MERGEABLE) of file '%s'.",
-                                  filename);
-                            log_madvise_3--;
-                        }
-                    }
-                }
-#endif
             }
-            else
-                error("Cannot write to file '%s' at position %zu.", filename, size);
+            else error("Cannot write to file '%s' at position %zu.", filename, size);
         }
-        else
-            error("Cannot seek file '%s' to size %zu.", filename, size);
-
-        close(fd);
+        else error("Cannot seek file '%s' to size %zu.", filename, size);
     }
-    else
-        error("Cannot create/open file '%s'.", filename);
+    else error("Cannot create/open file '%s'.", filename);
+
+    return fd;
+}
+
+// mmap_shared is used for memory mode = map
+static void *memory_file_mmap(const char *filename, size_t size, int flags) {
+    // info("memory_file_mmap('%s', %zu", filename, size);
+    static int log_madvise = 1;
+
+    int fd = -1;
+    if(filename) {
+        fd = memory_file_open(filename, size);
+        if(fd == -1) return MAP_FAILED;
+    }
+
+    void *mem = mmap(NULL, size, PROT_READ | PROT_WRITE, flags, fd, 0);
+    if (mem != MAP_FAILED) {
+#ifdef NETDATA_LOG_ALLOCATIONS
+        mmap_accounting(size);
+#endif
+        int advise = MADV_SEQUENTIAL | MADV_DONTFORK;
+        if (flags & MAP_SHARED) advise |= MADV_WILLNEED;
+
+        if (madvise(mem, size, advise) != 0 && log_madvise) {
+            error("Cannot advise the kernel about shared memory usage.");
+            log_madvise--;
+        }
+    }
+
+    if(fd != -1)
+        close(fd);
 
     return mem;
 }
 
-int savememory(const char *filename, void *mem, size_t size) {
+#ifdef MADV_MERGEABLE
+static void *memory_file_mmap_ksm(const char *filename, size_t size, int flags) {
+    // info("memory_file_mmap_ksm('%s', %zu", filename, size);
+    static int log_madvise_2 = 1, log_madvise_3 = 1;
+
+    int fd = -1;
+    if(filename) {
+        fd = memory_file_open(filename, size);
+        if(fd == -1) return MAP_FAILED;
+    }
+
+    void *mem = mmap(NULL, size, PROT_READ | PROT_WRITE, flags | MAP_ANONYMOUS, -1, 0);
+    if (mem != MAP_FAILED) {
+#ifdef NETDATA_LOG_ALLOCATIONS
+        mmap_accounting(size);
+#endif
+        if(fd != -1) {
+            if (lseek(fd, 0, SEEK_SET) == 0) {
+                if (read(fd, mem, size) != (ssize_t) size)
+                    error("Cannot read from file '%s'", filename);
+            }
+            else error("Cannot seek to beginning of file '%s'.", filename);
+        }
+
+        // don't use MADV_SEQUENTIAL|MADV_DONTFORK, they disable MADV_MERGEABLE
+        if (madvise(mem, size, MADV_SEQUENTIAL | MADV_DONTFORK) != 0 && log_madvise_2) {
+            error("Cannot advise the kernel about the memory usage (MADV_SEQUENTIAL|MADV_DONTFORK) of file '%s'.", filename);
+            log_madvise_2--;
+        }
+
+        if (madvise(mem, size, MADV_MERGEABLE) != 0 && log_madvise_3) {
+            error("Cannot advise the kernel about the memory usage (MADV_MERGEABLE) of file '%s'.", filename);
+            log_madvise_3--;
+        }
+    }
+
+    if(fd != -1)
+        close(fd);
+
+    return mem;
+}
+#else
+static void *memory_file_mmap_ksm(const char *filename, size_t size, int flags) {
+    // info("memory_file_mmap_ksm FALLBACK ('%s', %zu", filename, size);
+
+    if(filename)
+        return memory_file_mmap(filename, size, flags);
+
+    // when KSM is not available and no filename is given (memory mode = ram),
+    // we just report failure
+    return MAP_FAILED;
+}
+#endif
+
+void *mymmap(const char *filename, size_t size, int flags, int ksm) {
+    void *mem = NULL;
+
+    if (filename && (flags & MAP_SHARED || !enable_ksm || !ksm))
+        // memory mode = map | save
+        // when KSM is not enabled
+        // MAP_SHARED is used for memory mode = map (no KSM possible)
+        mem = memory_file_mmap(filename, size, flags);
+
+    else
+        // memory mode = save | ram
+        // when KSM is enabled
+        // for memory mode = ram, the filename is NULL
+        mem = memory_file_mmap_ksm(filename, size, flags);
+
+    if(mem == MAP_FAILED) return NULL;
+
+    errno = 0;
+    return mem;
+}
+
+int memory_file_save(const char *filename, void *mem, size_t size) {
     char tmpfilename[FILENAME_MAX + 1];
 
     snprintfz(tmpfilename, FILENAME_MAX, "%s.%ld.tmp", filename, (long) getpid());
@@ -1025,7 +1107,15 @@ int fd_is_valid(int fd) {
 }
 
 pid_t gettid(void) {
+#ifdef __FreeBSD__
+    return (pid_t)pthread_getthreadid_np();
+#elif defined(__APPLE__)
+    uint64_t curthreadid;
+    pthread_threadid_np(NULL, &curthreadid);
+    return (pid_t)curthreadid;
+#else
     return (pid_t)syscall(SYS_gettid);
+#endif /* __FreeBSD__, __APPLE__*/
 }
 
 char *fgets_trim_len(char *buf, size_t buf_size, FILE *fp, size_t *len) {
@@ -1046,17 +1136,6 @@ char *fgets_trim_len(char *buf, size_t buf_size, FILE *fp, size_t *len) {
         *len = t - s + 1;
 
     return s;
-}
-
-char *strncpyz(char *dst, const char *src, size_t n) {
-    char *p = dst;
-
-    while (*src && n--)
-        *dst++ = *src++;
-
-    *dst = '\0';
-
-    return p;
 }
 
 int vsnprintfz(char *dst, size_t n, const char *fmt, va_list args) {
@@ -1089,8 +1168,30 @@ int processors = 1;
 long get_system_cpus(void) {
     processors = 1;
 
+    #ifdef __APPLE__
+        int32_t tmp_processors;
+
+        if (unlikely(GETSYSCTL_BY_NAME("hw.logicalcpu", tmp_processors))) {
+            error("Assuming system has %d processors.", processors);
+        } else {
+            processors = tmp_processors;
+        }
+
+        return processors;
+    #elif __FreeBSD__
+        int32_t tmp_processors;
+
+        if (unlikely(GETSYSCTL_BY_NAME("hw.ncpu", tmp_processors))) {
+            error("Assuming system has %d processors.", processors);
+        } else {
+            processors = tmp_processors;
+        }
+
+        return processors;
+    #else
+
     char filename[FILENAME_MAX + 1];
-    snprintfz(filename, FILENAME_MAX, "%s/proc/stat", global_host_prefix);
+    snprintfz(filename, FILENAME_MAX, "%s/proc/stat", netdata_configured_host_prefix);
 
     procfile *ff = procfile_open(filename, NULL, PROCFILE_FLAG_DEFAULT);
     if(!ff) {
@@ -1118,35 +1219,52 @@ long get_system_cpus(void) {
 
     debug(D_SYSTEM, "System has %d processors.", processors);
     return processors;
+
+    #endif /* __APPLE__, __FreeBSD__ */
 }
 
 pid_t pid_max = 32768;
 pid_t get_system_pid_max(void) {
+    #ifdef __APPLE__
+        // As we currently do not know a solution to query pid_max from the os
+        // we use the number defined in bsd/sys/proc_internal.h in XNU sources
+        pid_max = 99999;
+        return pid_max;
+    #elif __FreeBSD__
+        int32_t tmp_pid_max;
+
+        if (unlikely(GETSYSCTL_BY_NAME("kern.pid_max", tmp_pid_max))) {
+            pid_max = 99999;
+            error("Assuming system's maximum pid is %d.", pid_max);
+        } else {
+            pid_max = tmp_pid_max;
+        }
+
+        return pid_max;
+    #else
+
+    static char read = 0;
+    if(unlikely(read)) return pid_max;
+    read = 1;
+
     char filename[FILENAME_MAX + 1];
-    snprintfz(filename, FILENAME_MAX, "%s/proc/sys/kernel/pid_max", global_host_prefix);
-    procfile *ff = procfile_open(filename, NULL, PROCFILE_FLAG_DEFAULT);
-    if(!ff) {
+    snprintfz(filename, FILENAME_MAX, "%s/proc/sys/kernel/pid_max", netdata_configured_host_prefix);
+
+    unsigned long long max = 0;
+    if(read_single_number_file(filename, &max) != 0) {
         error("Cannot open file '%s'. Assuming system supports %d pids.", filename, pid_max);
         return pid_max;
     }
 
-    ff = procfile_readall(ff);
-    if(!ff) {
-        error("Cannot read file '%s'. Assuming system supports %d pids.", filename, pid_max);
-        return pid_max;
-    }
-
-    pid_max = (pid_t)atoi(procfile_lineword(ff, 0, 0));
-    if(!pid_max) {
-        procfile_close(ff);
-        pid_max = 32768;
+    if(!max) {
         error("Cannot parse file '%s'. Assuming system supports %d pids.", filename, pid_max);
         return pid_max;
     }
 
-    procfile_close(ff);
-    debug(D_SYSTEM, "System supports %d pids.", pid_max);
+    pid_max = (pid_t) max;
     return pid_max;
+
+    #endif /* __APPLE__, __FreeBSD__ */
 }
 
 unsigned int hz;
@@ -1154,25 +1272,67 @@ void get_system_HZ(void) {
     long ticks;
 
     if ((ticks = sysconf(_SC_CLK_TCK)) == -1) {
-        perror("sysconf");
+        error("Cannot get system clock ticks");
     }
 
     hz = (unsigned int) ticks;
 }
 
-int read_single_number_file(const char *filename, unsigned long long *result) {
-    char buffer[1024 + 1];
+/*
+// poor man cycle counting
+static unsigned long tsc;
+void begin_tsc(void) {
+    unsigned long a, d;
+    asm volatile ("cpuid\nrdtsc" : "=a" (a), "=d" (d) : "0" (0) : "ebx", "ecx");
+    tsc = ((unsigned long)d << 32) | (unsigned long)a;
+}
+unsigned long end_tsc(void) {
+    unsigned long a, d;
+    asm volatile ("rdtscp" : "=a" (a), "=d" (d) : : "ecx");
+    return (((unsigned long)d << 32) | (unsigned long)a) - tsc;
+}
+*/
 
-    int fd = open(filename, O_RDONLY, 0666);
-    if(unlikely(fd == -1)) return 1;
-
-    ssize_t r = read(fd, buffer, 1024);
-    if(unlikely(r == -1)) {
-        close(fd);
-        return 2;
+int recursively_delete_dir(const char *path, const char *reason) {
+    DIR *dir = opendir(path);
+    if(!dir) {
+        error("Cannot read %s directory to be deleted '%s'", reason?reason:"", path);
+        return -1;
     }
 
-    close(fd);
-    *result = strtoull(buffer, NULL, 0);
-    return 0;
+    int ret = 0;
+    struct dirent *de = NULL;
+    while((de = readdir(dir))) {
+        if(de->d_type == DT_DIR
+           && (
+                   (de->d_name[0] == '.' && de->d_name[1] == '\0')
+                   || (de->d_name[0] == '.' && de->d_name[1] == '.' && de->d_name[2] == '\0')
+           ))
+            continue;
+
+        char fullpath[FILENAME_MAX + 1];
+        snprintfz(fullpath, FILENAME_MAX, "%s/%s", path, de->d_name);
+
+        if(de->d_type == DT_DIR) {
+            int r = recursively_delete_dir(fullpath, reason);
+            if(r > 0) ret += r;
+            continue;
+        }
+
+        info("Deleting %s file '%s'", reason?reason:"", fullpath);
+        if(unlikely(unlink(fullpath) == -1))
+            error("Cannot delete %s file '%s'", reason?reason:"", fullpath);
+        else
+            ret++;
+    }
+
+    info("Deleting empty directory '%s'", path);
+    if(unlikely(rmdir(path) == -1))
+        error("Cannot delete empty directory '%s'", path);
+    else
+        ret++;
+
+    closedir(dir);
+
+    return ret;
 }

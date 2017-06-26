@@ -1,9 +1,9 @@
 #include "common.h"
 
 #define RRD_TYPE_NET_IPVS           "ipvs"
-#define RRD_TYPE_NET_IPVS_LEN       strlen(RRD_TYPE_NET_IPVS)
 
-int do_proc_net_ip_vs_stats(int update_every, unsigned long long dt) {
+int do_proc_net_ip_vs_stats(int update_every, usec_t dt) {
+    (void)dt;
     static int do_bandwidth = -1, do_sockets = -1, do_packets = -1;
     static procfile *ff = NULL;
 
@@ -11,11 +11,9 @@ int do_proc_net_ip_vs_stats(int update_every, unsigned long long dt) {
     if(do_sockets == -1)    do_sockets      = config_get_boolean("plugin:proc:/proc/net/ip_vs_stats", "IPVS connections", 1);
     if(do_packets == -1)    do_packets      = config_get_boolean("plugin:proc:/proc/net/ip_vs_stats", "IPVS packets", 1);
 
-    if(dt) {};
-
     if(!ff) {
         char filename[FILENAME_MAX + 1];
-        snprintfz(filename, FILENAME_MAX, "%s%s", global_host_prefix, "/proc/net/ip_vs_stats");
+        snprintfz(filename, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/proc/net/ip_vs_stats");
         ff = procfile_open(config_get("plugin:proc:/proc/net/ip_vs_stats", "filename to monitor", filename), " \t,:|", PROCFILE_FLAG_DEFAULT);
     }
     if(!ff) return 1;
@@ -42,11 +40,13 @@ int do_proc_net_ip_vs_stats(int update_every, unsigned long long dt) {
     // --------------------------------------------------------------------
 
     if(do_sockets) {
-        st = rrdset_find(RRD_TYPE_NET_IPVS ".sockets");
+        st = rrdset_find_localhost(RRD_TYPE_NET_IPVS ".sockets");
         if(!st) {
-            st = rrdset_create(RRD_TYPE_NET_IPVS, "sockets", NULL, RRD_TYPE_NET_IPVS, NULL, "IPVS New Connections", "connections/s", 3101, update_every, RRDSET_TYPE_LINE);
+            st = rrdset_create_localhost(RRD_TYPE_NET_IPVS, "sockets", NULL, RRD_TYPE_NET_IPVS, NULL
+                                         , "IPVS New Connections", "connections/s", 3101, update_every
+                                         , RRDSET_TYPE_LINE);
 
-            rrddim_add(st, "connections", NULL, 1, 1, RRDDIM_INCREMENTAL);
+            rrddim_add(st, "connections", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
         }
         else rrdset_next(st);
 
@@ -57,12 +57,13 @@ int do_proc_net_ip_vs_stats(int update_every, unsigned long long dt) {
     // --------------------------------------------------------------------
 
     if(do_packets) {
-        st = rrdset_find(RRD_TYPE_NET_IPVS ".packets");
+        st = rrdset_find_localhost(RRD_TYPE_NET_IPVS ".packets");
         if(!st) {
-            st = rrdset_create(RRD_TYPE_NET_IPVS, "packets", NULL, RRD_TYPE_NET_IPVS, NULL, "IPVS Packets", "packets/s", 3102, update_every, RRDSET_TYPE_LINE);
+            st = rrdset_create_localhost(RRD_TYPE_NET_IPVS, "packets", NULL, RRD_TYPE_NET_IPVS, NULL, "IPVS Packets"
+                                         , "packets/s", 3102, update_every, RRDSET_TYPE_LINE);
 
-            rrddim_add(st, "received", NULL, 1, 1, RRDDIM_INCREMENTAL);
-            rrddim_add(st, "sent", NULL, -1, 1, RRDDIM_INCREMENTAL);
+            rrddim_add(st, "received", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st, "sent", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
         }
         else rrdset_next(st);
 
@@ -74,12 +75,13 @@ int do_proc_net_ip_vs_stats(int update_every, unsigned long long dt) {
     // --------------------------------------------------------------------
 
     if(do_bandwidth) {
-        st = rrdset_find(RRD_TYPE_NET_IPVS ".net");
+        st = rrdset_find_localhost(RRD_TYPE_NET_IPVS ".net");
         if(!st) {
-            st = rrdset_create(RRD_TYPE_NET_IPVS, "net", NULL, RRD_TYPE_NET_IPVS, NULL, "IPVS Bandwidth", "kilobits/s", 3100, update_every, RRDSET_TYPE_AREA);
+            st = rrdset_create_localhost(RRD_TYPE_NET_IPVS, "net", NULL, RRD_TYPE_NET_IPVS, NULL, "IPVS Bandwidth"
+                                         , "kilobits/s", 3100, update_every, RRDSET_TYPE_AREA);
 
-            rrddim_add(st, "received", NULL, 8, 1024, RRDDIM_INCREMENTAL);
-            rrddim_add(st, "sent", NULL, -8, 1024, RRDDIM_INCREMENTAL);
+            rrddim_add(st, "received", NULL, 8, 1024, RRD_ALGORITHM_INCREMENTAL);
+            rrddim_add(st, "sent", NULL, -8, 1024, RRD_ALGORITHM_INCREMENTAL);
         }
         else rrdset_next(st);
 

@@ -2,7 +2,7 @@
 
 # netdata
 # real-time performance and health monitoring, done right!
-# (C) 2016 Costa Tsaousis <costa@tsaousis.gr>
+# (C) 2017 Costa Tsaousis <costa@tsaousis.gr>
 # GPL v3+
 #
 # Script to send alarm notifications for netdata
@@ -14,12 +14,18 @@
 #  - severity filtering per recipient
 #
 # Supported notification methods:
-#  - emails
-#  - slack.com notifications
-#  - pushover.net notifications
-#  - pushbullet.com push notifications by Tiago Peralta @tperalta82 PR #1070
-#  - telegram.org notifications by @hashworks PR #1002
-#
+#  - emails by @ktsaou
+#  - slack.com notifications by @ktsaou
+#  - discordapp.com notifications by @lowfive
+#  - pushover.net notifications by @ktsaou
+#  - pushbullet.com push notifications by Tiago Peralta @tperalta82 #1070
+#  - telegram.org notifications by @hashworks #1002
+#  - twilio.com notifications by Levi Blaney @shadycuz #1211
+#  - kafka notifications by @ktsaou #1342
+#  - pagerduty.com notifications by Jim Cooley @jimcooley #1373
+#  - messagebird.com notifications by @tech_no_logical #1453
+#  - hipchat notifications by @ktsaou #1561
+#  - custom notifications by @ktsaou
 
 # -----------------------------------------------------------------------------
 # testing notifications
@@ -42,7 +48,7 @@ then
         echo >&2
         echo >&2 "# SENDING TEST ${x} ALARM TO ROLE: ${recipient}"
 
-        "${0}" "${recipient}" "$(hostname)" 1 1 "${id}" "$(date +%s)" "test_alarm" "test.chart" "test.family" "${x}" "${last}" 100 90 "${0}" 1 $((0 + id)) "units" "this is a test alarm to verify notifications work"
+        "${0}" "${recipient}" "$(hostname)" 1 1 "${id}" "$(date +%s)" "test_alarm" "test.chart" "test.family" "${x}" "${last}" 100 90 "${0}" 1 $((0 + id)) "units" "this is a test alarm to verify notifications work" "new value" "old value"
         if [ $? -ne 0 ]
         then
             echo >&2 "# FAILED"
@@ -98,6 +104,15 @@ debug() {
     [ ${debug} -eq 1 ] && log DEBUG "${@}"
 }
 
+
+# -----------------------------------------------------------------------------
+# this is to be overwritten by the config file
+
+custom_sender() {
+    info "not sending custom notification for ${status} of '${host}.${chart}.${name}'"
+}
+
+
 # -----------------------------------------------------------------------------
 
 # check for BASH v4+ (required for associative arrays)
@@ -107,11 +122,9 @@ debug() {
 # -----------------------------------------------------------------------------
 # defaults to allow running this script by hand
 
-NETDATA_CONFIG_DIR="${NETDATA_CONFIG_DIR-/etc/netdata}"
-NETDATA_CACHE_DIR="${NETDATA_CACHE_DIR-/var/cache/netdata}"
+[ -z "${NETDATA_CONFIG_DIR}" ] && NETDATA_CONFIG_DIR="$(dirname "${0}")/../../../../etc/netdata"
+[ -z "${NETDATA_CACHE_DIR}" ] && NETDATA_CACHE_DIR="$(dirname "${0}")/../../../../var/cache/netdata"
 [ -z "${NETDATA_REGISTRY_URL}" ] && NETDATA_REGISTRY_URL="https://registry.my-netdata.io"
-[ -z "${NETDATA_HOSTNAME}" ] && NETDATA_HOSTNAME="$(hostname)"
-[ -z "${NETDATA_REGISTRY_HOSTNAME}" ] && NETDATA_REGISTRY_HOSTNAME="${NETDATA_HOSTNAME}"
 
 # -----------------------------------------------------------------------------
 # parse command line parameters
@@ -125,8 +138,8 @@ when="${6}"        # the timestamp this event occurred
 name="${7}"        # the name of the alarm, as given in netdata health.d entries
 chart="${8}"       # the name of the chart (type.id)
 family="${9}"      # the family of the chart
-status="${10}"     # the current status : REMOVED, UNITIALIZED, UNDEFINED, CLEAR, WARNING, CRITICAL
-old_status="${11}" # the previous status: REMOVED, UNITIALIZED, UNDEFINED, CLEAR, WARNING, CRITICAL
+status="${10}"     # the current status : REMOVED, UNINITIALIZED, UNDEFINED, CLEAR, WARNING, CRITICAL
+old_status="${11}" # the previous status: REMOVED, UNINITIALIZED, UNDEFINED, CLEAR, WARNING, CRITICAL
 value="${12}"      # the current value of the alarm
 old_value="${13}"  # the previous value of the alarm
 src="${14}"        # the line number and file the alarm has been configured
@@ -134,6 +147,14 @@ duration="${15}"   # the duration in seconds of the previous alarm state
 non_clear_duration="${16}" # the total duration in seconds this is/was non-clear
 units="${17}"      # the units of the value
 info="${18}"       # a short description of the alarm
+value_string="${19}"        # friendly value (with units)
+old_value_string="${20}"    # friendly old value (with units)
+
+# -----------------------------------------------------------------------------
+# find a suitable hostname to use, if netdata did not supply a hostname
+
+this_host=$(hostname -s 2>/dev/null)
+[ -z "${host}" ] && host="${this_host}"
 
 # -----------------------------------------------------------------------------
 # screen statuses we don't need to send a notification
@@ -141,14 +162,14 @@ info="${18}"       # a short description of the alarm
 # don't do anything if this is not WARNING, CRITICAL or CLEAR
 if [ "${status}" != "WARNING" -a "${status}" != "CRITICAL" -a "${status}" != "CLEAR" ]
 then
-    info "not sending notification for ${status} on '${chart}.${name}'"
+    info "not sending notification for ${status} of '${host}.${chart}.${name}'"
     exit 1
 fi
 
 # don't do anything if this is CLEAR, but it was not WARNING or CRITICAL
 if [ "${old_status}" != "WARNING" -a "${old_status}" != "CRITICAL" -a "${status}" = "CLEAR" ]
 then
-    info "not sending notification for ${status} on '${chart}.${name}' (last status was ${old_status})"
+    info "not sending notification for ${status} of '${host}.${chart}.${name}' (last status was ${old_status})"
     exit 1
 fi
 
@@ -168,16 +189,27 @@ sendmail=
 
 # enable / disable features
 SEND_SLACK="YES"
+SEND_DISCORD="YES"
 SEND_PUSHOVER="YES"
 SEND_TWILIO="YES"
+SEND_HIPCHAT="YES"
+SEND_MESSAGEBIRD="YES"
 SEND_TELEGRAM="YES"
 SEND_EMAIL="YES"
 SEND_PUSHBULLET="YES"
+SEND_KAFKA="YES"
+SEND_PD="YES"
+SEND_CUSTOM="YES"
 
 # slack configs
 SLACK_WEBHOOK_URL=
 DEFAULT_RECIPIENT_SLACK=
 declare -A role_recipients_slack=()
+
+# discord configs
+DISCORD_WEBHOOK_URL=
+DEFAULT_RECIPIENT_DISCORD=
+declare -A role_recipients_discord=()
 
 # pushover configs
 PUSHOVER_APP_TOKEN=
@@ -196,10 +228,34 @@ TWILIO_NUMBER=
 DEFAULT_RECIPIENT_TWILIO=
 declare -A role_recipients_twilio=()
 
+# hipchat configs
+HIPCHAT_SERVER=
+HIPCHAT_AUTH_TOKEN=
+DEFAULT_RECIPIENT_HIPCHAT=
+declare -A role_recipients_hipchat=()
+
+# messagebird configs
+MESSAGEBIRD_ACCESS_KEY=
+MESSAGEBIRD_NUMBER=
+DEFAULT_RECIPIENT_MESSAGEBIRD=
+declare -A role_recipients_messagebird=()
+
 # telegram configs
 TELEGRAM_BOT_TOKEN=
 DEFAULT_RECIPIENT_TELEGRAM=
 declare -A role_recipients_telegram=()
+
+# kafka configs
+KAFKA_URL=
+KAFKA_SENDER_IP=
+
+# pagerduty.com configs
+PD_SERVICE_KEY=
+declare -A role_recipients_pd=()
+
+# custom configs
+DEFAULT_RECIPIENT_CUSTOM=
+declare -A role_recipients_custom=()
 
 # email configs
 DEFAULT_RECIPIENT_EMAIL="root"
@@ -256,11 +312,15 @@ filter_recipient_by_criticality() {
 # find the recipients' addresses per method
 
 declare -A arr_slack=()
+declare -A arr_discord=()
 declare -A arr_pushover=()
 declare -A arr_pushbullet=()
 declare -A arr_twilio=()
+declare -A arr_hipchat=()
 declare -A arr_telegram=()
+declare -A arr_pd=()
 declare -A arr_email=()
+declare -A arr_custom=()
 
 # netdata may call us with multiple roles, and roles may have multiple but
 # overlapping recipients - so, here we find the unique recipients.
@@ -302,6 +362,22 @@ do
         [ "${r}" != "disabled" ] && filter_recipient_by_criticality twilio "${r}" && arr_twilio[${r/|*/}]="1"
     done
 
+    # hipchat
+    a="${role_recipients_hipchat[${x}]}"
+    [ -z "${a}" ] && a="${DEFAULT_RECIPIENT_HIPCHAT}"
+    for r in ${a//,/ }
+    do
+        [ "${r}" != "disabled" ] && filter_recipient_by_criticality hipchat "${r}" && arr_hipchat[${r/|*/}]="1"
+    done
+
+    # messagebird
+    a="${role_recipients_messagebird[${x}]}"
+    [ -z "${a}" ] && a="${DEFAULT_RECIPIENT_MESSAGEBIRD}"
+    for r in ${a//,/ }
+    do
+        [ "${r}" != "disabled" ] && filter_recipient_by_criticality messagebird "${r}" && arr_messagebird[${r/|*/}]="1"
+    done
+
     # telegram
     a="${role_recipients_telegram[${x}]}"
     [ -z "${a}" ] && a="${DEFAULT_RECIPIENT_TELEGRAM}"
@@ -317,11 +393,40 @@ do
     do
         [ "${r}" != "disabled" ] && filter_recipient_by_criticality slack "${r}" && arr_slack[${r/|*/}]="1"
     done
+
+    # discord
+    a="${role_recipients_discord[${x}]}"
+    [ -z "${a}" ] && a="${DEFAULT_RECIPIENT_DISCORD}"
+    for r in ${a//,/ }
+    do
+        [ "${r}" != "disabled" ] && filter_recipient_by_criticality discord "${r}" && arr_discord[${r/|*/}]="1"
+    done
+
+    # pagerduty.com
+    a="${role_recipients_pd[${x}]}"
+    [ -z "${a}" ] && a="${DEFAULT_RECIPIENT_PD}"
+    for r in ${a//,/ }
+    do
+        [ "${r}" != "disabled" ] && filter_recipient_by_criticality pd "${r}" && arr_pd[${r/|*/}]="1"
+    done
+
+    # custom
+    a="${role_recipients_custom[${x}]}"
+    [ -z "${a}" ] && a="${DEFAULT_RECIPIENT_CUSTOM}"
+    for r in ${a//,/ }
+    do
+        [ "${r}" != "disabled" ] && filter_recipient_by_criticality custom "${r}" && arr_custom[${r/|*/}]="1"
+    done
+
 done
 
 # build the list of slack recipients (channels)
 to_slack="${!arr_slack[*]}"
 [ -z "${to_slack}" ] && SEND_SLACK="NO"
+
+# build the list of discord recipients (channels)
+to_discord="${!arr_discord[*]}"
+[ -z "${to_discord}" ] && SEND_DISCORD="NO"
 
 # build the list of pushover recipients (user tokens)
 to_pushover="${!arr_pushover[*]}"
@@ -335,9 +440,25 @@ to_pushbullet="${!arr_pushbullet[*]}"
 to_twilio="${!arr_twilio[*]}"
 [ -z "${to_twilio}" ] && SEND_TWILIO="NO"
 
+# build the list of hipchat recipients (rooms)
+to_hipchat="${!arr_hipchat[*]}"
+[ -z "${to_hipchat}" ] && SEND_HIPCHAT="NO"
+
+# build the list of messagebird recipients (phone numbers)
+to_messagebird="${!arr_messagebird[*]}"
+[ -z "${to_messagebird}" ] && SEND_MESSAGEBIRD="NO"
+
 # check array of telegram recipients (chat ids)
 to_telegram="${!arr_telegram[*]}"
 [ -z "${to_telegram}" ] && SEND_TELEGRAM="NO"
+
+# build the list of pagerduty recipients (service keys)
+to_pd="${!arr_pd[*]}"
+[ -z "${to_pd}" ] && SEND_PD="NO"
+
+# build the list of custom recipients
+to_custom="${!arr_custom[*]}"
+[ -z "${to_custom}" ] && SEND_CUSTOM="NO"
 
 # build the list of email recipients (email addresses)
 to_email=
@@ -355,31 +476,75 @@ done
 # check slack
 [ -z "${SLACK_WEBHOOK_URL}" ] && SEND_SLACK="NO"
 
+# check discord
+[ -z "${DISCORD_WEBHOOK_URL}" ] && SEND_DISCORD="NO"
+
 # check pushover
 [ -z "${PUSHOVER_APP_TOKEN}" ] && SEND_PUSHOVER="NO"
 
 # check pushbullet
-[ -z "${DEFAULT_RECIPIENT_PUSHBULLET}" ] && SEND_PUSHBULLET="NO"
+[ -z "${PUSHBULLET_ACCESS_TOKEN}" ] && SEND_PUSHBULLET="NO"
 
 # check twilio
-[ -z "${DEFAULT_RECIPIENT_TWILIO}" ] && SEND_TWILIO="NO"
+[ -z "${TWILIO_ACCOUNT_TOKEN}" -o -z "${TWILIO_ACCOUNT_SID}" -o -z "${TWILIO_NUMBER}" ] && SEND_TWILIO="NO"
+
+# check hipchat
+[ -z "${HIPCHAT_AUTH_TOKEN}" ] && SEND_HIPCHAT="NO"
+
+# check messagebird
+[ -z "${MESSAGEBIRD_ACCESS_KEY}" -o -z "${MESSAGEBIRD_NUMBER}" ] && SEND_MESSAGEBIRD="NO"
 
 # check telegram
 [ -z "${TELEGRAM_BOT_TOKEN}" ] && SEND_TELEGRAM="NO"
 
-if [ \( "${SEND_PUSHOVER}" = "YES" -o "${SEND_SLACK}" = "YES" -o "${SEND_TWILIO}" = "YES" -o "${SEND_TELEGRAM}" = "YES" -o "${SEND_PUSHBULLET}" = "YES" \) -a -z "${curl}" ]
+# check kafka
+[ -z "${KAFKA_URL}" -o -z "${KAFKA_SENDER_IP}" ] && SEND_KAFKA="NO"
+
+# check pagerduty.com
+# if we need pd-send, check for the pd-send command
+# https://www.pagerduty.com/docs/guides/agent-install-guide/
+if [ "${SEND_PD}" = "YES" ]
+    then
+    pd_send="$(which pd-send 2>/dev/null || command -v pd-send 2>/dev/null)"
+    if [ -z "${pd_send}" ]
+        then
+        # no pd-send available
+        # disable pagerduty.com
+        SEND_PD="NO"
+    fi
+fi
+
+# if we need curl, check for the curl command
+if [ \( \
+           "${SEND_PUSHOVER}"    = "YES" \
+        -o "${SEND_SLACK}"       = "YES" \
+        -o "${SEND_DISCORD}"     = "YES" \
+        -o "${SEND_HIPCHAT}"     = "YES" \
+        -o "${SEND_TWILIO}"      = "YES" \
+        -o "${SEND_MESSAGEBIRD}" = "YES" \
+        -o "${SEND_TELEGRAM}"    = "YES" \
+        -o "${SEND_PUSHBULLET}"  = "YES" \
+        -o "${SEND_KAFKA}"       = "YES" \
+    \) -a -z "${curl}" ]
     then
     curl="$(which curl 2>/dev/null || command -v curl 2>/dev/null)"
     if [ -z "${curl}" ]
         then
+        # no curl available
+        # disable all curl based methods
         SEND_PUSHOVER="NO"
         SEND_PUSHBULLET="NO"
         SEND_TELEGRAM="NO"
         SEND_SLACK="NO"
+        SEND_DISCORD="NO"
         SEND_TWILIO="NO"
+        SEND_HIPCHAT="NO"
+        SEND_MESSAGEBIRD="NO"
+        SEND_KAFKA="NO"
     fi
 fi
 
+# if we need sendmail, check for the sendmail command
 if [ "${SEND_EMAIL}" = "YES" -a -z "${sendmail}" ]
     then
     sendmail="$(which sendmail 2>/dev/null || command -v sendmail 2>/dev/null)"
@@ -387,17 +552,22 @@ if [ "${SEND_EMAIL}" = "YES" -a -z "${sendmail}" ]
 fi
 
 # check that we have at least a method enabled
-if [ "${SEND_EMAIL}" != "YES" -a "${SEND_PUSHOVER}" != "YES" -a "${SEND_TELEGRAM}" != "YES" -a "${SEND_SLACK}" != "YES" -a "${SEND_TWILIO}" != "YES" -a  "${SEND_PUSHBULLET}" != "YES" ]
+if [   "${SEND_EMAIL}"          != "YES" \
+    -a "${SEND_PUSHOVER}"       != "YES" \
+    -a "${SEND_TELEGRAM}"       != "YES" \
+    -a "${SEND_SLACK}"          != "YES" \
+    -a "${SEND_DISCORD}"        != "YES" \
+    -a "${SEND_TWILIO}"         != "YES" \
+    -a "${SEND_HIPCHAT}"        != "YES" \
+    -a "${SEND_MESSAGEBIRD}"    != "YES" \
+    -a "${SEND_PUSHBULLET}"     != "YES" \
+    -a "${SEND_KAFKA}"          != "YES" \
+    -a "${SEND_PD}"             != "YES" \
+    -a "${SEND_CUSTOM}"         != "YES" \
+    ]
     then
-    fatal "All notification methods are disabled. Not sending notification to '${role}' for '${name}' = '${value}' of chart '${chart}' for status '${status}'."
+    fatal "All notification methods are disabled. Not sending notification for host '${host}', chart '${chart}' to '${roles}' for '${name}' = '${value}' for status '${status}'."
 fi
-
-# -----------------------------------------------------------------------------
-# get the system hostname
-
-[ -z "${host}" ] && host="${NETDATA_HOSTNAME}"
-[ -z "${host}" ] && host="${NETDATA_REGISTRY_HOSTNAME}"
-[ -z "${host}" ] && host="$(hostname 2>/dev/null)"
 
 # -----------------------------------------------------------------------------
 # get the date the alarm happened
@@ -406,7 +576,7 @@ date="$(date --date=@${when} 2>/dev/null)"
 [ -z "${date}" ] && date="$(date 2>/dev/null)"
 
 # -----------------------------------------------------------------------------
-# URL encode a string
+# function to URL encode a string
 
 urlencode() {
     local string="${1}" strlen encoded pos c o
@@ -432,7 +602,7 @@ urlencode() {
 }
 
 # -----------------------------------------------------------------------------
-# convert a duration in seconds, to a human readable duration
+# function to convert a duration in seconds, to a human readable duration
 # using DAYS, MINUTES, SECONDS
 
 duration4human() {
@@ -593,6 +763,87 @@ EOF
 }
 
 # -----------------------------------------------------------------------------
+# kafka sender
+
+send_kafka() {
+    local httpcode sent=0 
+    if [ "${SEND_KAFKA}" = "YES" ]
+        then
+            httpcode=$(${curl} -X POST --write-out %{http_code} --silent --output /dev/null \
+                --data "{host_ip:\"${KAFKA_SENDER_IP}\",when:${when},name:\"${name}\",chart:\"${chart}\",family:\"${family}\",status:\"${status}\",old_status:\"${old_status}\",value:${value},old_value:${old_value},duration:${duration},non_clear_duration:${non_clear_duration},units:\"${units}\",info:\"${info}\"}" \
+                "${KAFKA_URL}")
+
+            if [ "${httpcode}" == "204" ]
+            then
+                info "sent kafka data for: ${host} ${chart}.${name} is ${status} and ip '${KAFKA_SENDER_IP}'"
+                sent=$((sent + 1))
+            else
+                error "failed to send kafka data for: ${host} ${chart}.${name} is ${status} and ip '${KAFKA_SENDER_IP}' with HTTP error code ${httpcode}."
+            fi
+
+        [ ${sent} -gt 0 ] && return 0
+    fi
+
+    return 1
+}
+
+# -----------------------------------------------------------------------------
+# pagerduty.com sender
+
+send_pd() {
+    local recipients="${1}" sent=0
+    unset t
+    case ${status} in
+        CLEAR)    t='resolve';;
+        WARNING)  t='trigger';;
+        CRITICAL) t='trigger';;
+    esac
+
+    if [ ${SEND_PD} = "YES" -a ! -z "${t}" ]
+        then
+        for PD_SERVICE_KEY in ${recipients}
+        do
+            d="${status} ${name} = ${value_string} - ${host}, ${family}"
+            ${pd_send} -k ${PD_SERVICE_KEY} \
+                       -t ${t} \
+                       -d "${d}" \
+                       -i ${alarm_id} \
+                       -f 'info'="${info}" \
+                       -f 'value_w_units'="${value_string}" \
+                       -f 'when'="${when}" \
+                       -f 'duration'="${duration}" \
+                       -f 'roles'="${roles}" \
+                       -f 'host'="${host}" \
+                       -f 'unique_id'="${unique_id}" \
+                       -f 'alarm_id'="${alarm_id}" \
+                       -f 'event_id'="${event_id}" \
+                       -f 'name'="${name}" \
+                       -f 'chart'="${chart}" \
+                       -f 'family'="${family}" \
+                       -f 'status'="${status}" \
+                       -f 'old_status'="${old_status}" \
+                       -f 'value'="${value}" \
+                       -f 'old_value'="${old_value}" \
+                       -f 'src'="${src}" \
+                       -f 'non_clear_duration'="${non_clear_duration}" \
+                       -f 'units'="${units}"
+            retval=$?
+            if [ ${retval} -eq 0 ]
+                then
+                    info "sent pagerduty.com notification for host ${host} ${chart}.${name} using service key ${PD_SERVICE_KEY::-26}....: ${d}"
+                    sent=$((sent + 1))
+                else
+                    error "failed to send pagerduty.com notification for ${host} ${chart}.${name} using service key ${PD_SERVICE_KEY::-26}.... (error code ${retval}): ${d}"
+            fi
+        done
+
+        [ ${sent} -gt 0 ] && return 0
+    fi
+
+    return 1
+}
+
+# -----------------------------------------------------------------------------
 # twilio sender
 
 send_twilio() {
@@ -624,13 +875,107 @@ send_twilio() {
     return 1
 }
 
+
+# -----------------------------------------------------------------------------
+# hipchat sender
+
+send_hipchat() {
+    local authtoken="${1}" recipients="${2}" message="${3}" httpcode sent=0 room color sender msg_format notify
+
+    if [ "${SEND_HIPCHAT}" = "YES" -a ! -z "${HIPCHAT_SERVER}" -a ! -z "${authtoken}" -a ! -z "${recipients}" -a ! -z "${message}" ]
+    then
+        # A label to be shown in addition to the sender's name
+        # Valid length range: 0 - 64. 
+        sender="netdata"
+
+        # Valid values: html, text.
+        # Defaults to 'html'.
+        msg_format="html"
+
+        # Background color for message. Valid values: yellow, green, red, purple, gray, random. Defaults to 'yellow'.
+        case "${status}" in
+            WARNING)  color="yellow" ;;
+            CRITICAL) color="red" ;;
+            CLEAR)    color="green" ;;
+            *)        color="gray" ;;
+        esac
+
+        # Whether this message should trigger a user notification (change the tab color, play a sound, notify mobile phones, etc).
+        # Each recipient's notification preferences are taken into account.
+        # Defaults to false.
+        notify="true"
+
+        for room in ${recipients}
+        do
+            httpcode=$(${curl} -X POST --write-out %{http_code} --silent --output /dev/null \
+                    -H "Content-type: application/json" \
+                    -H "Authorization: Bearer ${authtoken}" \
+                    -d "{\"color\": \"${color}\", \"from\": \"${netdata}\", \"message_format\": \"${msg_format}\", \"message\": \"${message}\", \"notify\": \"${notify}\"}" \
+                    "https://${HIPCHAT_SERVER}/v2/room/${room}/notification")
+ 
+            if [ "${httpcode}" == "204" ]
+            then
+                info "sent HipChat notification for: ${host} ${chart}.${name} is ${status} to '${room}'"
+                sent=$((sent + 1))
+            else
+                error "failed to send HipChat notification for: ${host} ${chart}.${name} is ${status} to '${room}' with HTTP error code ${httpcode}."
+            fi
+        done
+
+        [ ${sent} -gt 0 ] && return 0
+    fi
+
+    return 1
+}
+
+
+# -----------------------------------------------------------------------------
+# messagebird sender
+
+send_messagebird() {
+    local accesskey="${1}" messagebirdnumber="${2}" recipients="${3}"  title="${4}" message="${5}" httpcode sent=0 user
+    if [ "${SEND_MESSAGEBIRD}" = "YES" -a ! -z "${accesskey}" -a ! -z "${messagebirdnumber}" -a ! -z "${recipients}" -a ! -z "${message}" -a ! -z "${title}" ]
+        then
+        #https://developers.messagebird.com/docs/messaging
+        for user in ${recipients}
+        do
+            httpcode=$(${curl} -X POST --write-out %{http_code} --silent --output /dev/null \
+                --data-urlencode "originator=${messagebirdnumber}" \
+                --data-urlencode "recipients=${user}" \
+                --data-urlencode "body=${title} ${message}" \
+		        --data-urlencode "datacoding=auto" \
+                -H "Authorization: AccessKey ${accesskey}" \
+                "https://rest.messagebird.com/messages")
+
+            if [ "${httpcode}" == "201" ]
+            then
+                info "sent Messagebird SMS for: ${host} ${chart}.${name} is ${status} to '${user}'"
+                sent=$((sent + 1))
+            else
+                error "failed to send Messagebird SMS for: ${host} ${chart}.${name} is ${status} to '${user}' with HTTP error code ${httpcode}."
+            fi
+        done
+
+        [ ${sent} -gt 0 ] && return 0
+    fi
+
+    return 1
+}
+
 # -----------------------------------------------------------------------------
 # telegram sender
 
 send_telegram() {
-    local bottoken="${1}" chatids="${2}" message="${3}" httpcode sent=0 chatid disableNotification=""
+    local bottoken="${1}" chatids="${2}" message="${3}" httpcode sent=0 chatid emoji disableNotification=""
 
     if [ "${status}" = "CLEAR" ]; then disableNotification="--data-urlencode disable_notification=true"; fi
+    
+    case "${status}" in
+        WARNING)  emoji="⚠️" ;;
+        CRITICAL) emoji="🔴" ;;
+        CLEAR)    emoji="✅" ;;
+        *)        emoji="⚪️" ;;
+    esac
 
     if [ "${SEND_TELEGRAM}" = "YES" -a ! -z "${bottoken}" -a ! -z "${chatids}" -a ! -z "${message}" ];
     then
@@ -640,7 +985,7 @@ send_telegram() {
             httpcode=$(${curl} --write-out %{http_code} --silent --output /dev/null ${disableNotification} \
                 --data-urlencode "parse_mode=HTML" \
                 --data-urlencode "disable_web_page_preview=true" \
-                --data-urlencode "text=${message}" \
+                --data-urlencode "text=${emoji} ${message}" \
                 "https://api.telegram.org/bot${bottoken}/sendMessage?chat_id=${chatid}")
 
             if [ "${httpcode}" == "200" ]
@@ -725,12 +1070,75 @@ EOF
     return 1
 }
 
+# -----------------------------------------------------------------------------
+# discord sender
+
+send_discord() {
+    local webhook="${1}/slack" channels="${2}" httpcode sent=0 channel color payload username
+
+    [ "${SEND_DISCORD}" != "YES" ] && return 1
+
+    case "${status}" in
+        WARNING)  color="warning" ;;
+        CRITICAL) color="danger" ;;
+        CLEAR)    color="good" ;;
+        *)        color="#777777" ;;
+    esac
+
+    for channel in ${channels}
+    do
+        username="netdata on ${host}"
+        [ ${#username} -gt 32 ] && username="${username:0:29}..."
+
+        payload="$(cat <<EOF
+        {
+            "channel": "#${channel}",
+            "username": "${username}",
+            "text": "${host} ${status_message}, \`${chart}\` (_${family}_), *${alarm}*",
+            "icon_url": "${images_base_url}/images/seo-performance-128.png",
+            "attachments": [
+                {
+                    "color": "${color}",
+                    "title": "${alarm}",
+                    "title_link": "${goto_url}",
+                    "text": "${info}",
+                    "fields": [
+                        {
+                            "title": "${chart}",
+                            "value": "${family}"
+                        }
+                    ],
+                    "thumb_url": "${image}",
+                    "footer_icon": "${images_base_url}/images/seo-performance-128.png",
+                    "footer": "${host}",
+                    "ts": ${when}
+                }
+            ]
+        }
+EOF
+        )"
+
+        httpcode=$(${curl} --write-out %{http_code} --silent --output /dev/null -X POST --data-urlencode "payload=${payload}" "${webhook}")
+        if [ "${httpcode}" == "200" ]
+        then
+            info "sent discord notification for: ${host} ${chart}.${name} is ${status} to '${channel}'"
+            sent=$((sent + 1))
+        else
+            error "failed to send discord notification for: ${host} ${chart}.${name} is ${status} to '${channel}', with HTTP error code ${httpcode}."
+        fi
+    done
+
+    [ ${sent} -gt 0 ] && return 0
+
+    return 1
+}
+
 
 # -----------------------------------------------------------------------------
 # prepare the content of the notification
 
 # the url to send the user on click
-urlencode "${NETDATA_REGISTRY_HOSTNAME}" >/dev/null; url_host="${REPLY}"
+urlencode "${host}" >/dev/null; url_host="${REPLY}"
 urlencode "${chart}" >/dev/null; url_chart="${REPLY}"
 urlencode "${family}" >/dev/null; url_family="${REPLY}"
 urlencode "${name}" >/dev/null; url_name="${REPLY}"
@@ -751,7 +1159,7 @@ status_message="status unknown"
 color="grey"
 
 # the alarm value
-alarm="${name//_/ } = ${value} ${units}"
+alarm="${name//_/ } = ${value_string}"
 
 # the image of the alarm
 image="${images_base_url}/images/seo-performance-128.png"
@@ -826,6 +1234,15 @@ send_slack "${SLACK_WEBHOOK_URL}" "${to_slack}"
 SENT_SLACK=$?
 
 # -----------------------------------------------------------------------------
+# send the discord notification
+
+# discord aggregates posts from the same username
+# so we use "${host} ${status}" as the bot username, to make them diff
+
+send_discord "${DISCORD_WEBHOOK_URL}" "${to_discord}"
+SENT_DISCORD=$?
+
+# -----------------------------------------------------------------------------
 # send the pushover notification
 
 send_pushover "${PUSHOVER_APP_TOKEN}" "${to_pushover}" "${when}" "${goto_url}" "${status}" "${host} ${status_message} - ${name//_/ } - ${chart}" "
@@ -864,6 +1281,18 @@ ${info}"
 SENT_TWILIO=$?
 
 # -----------------------------------------------------------------------------
+# send the messagebird SMS
+
+send_messagebird "${MESSAGEBIRD_ACCESS_KEY}" "${MESSAGEBIRD_NUMBER}" "${to_messagebird}" "${host} ${status_message} - ${name//_/ } - ${chart}" "${alarm} 
+Severity: ${severity}
+Chart: ${chart}
+Family: ${family}
+${info}"
+
+SENT_MESSAGEBIRD=$?
+
+
+# -----------------------------------------------------------------------------
 # send the telegram.org message
 
 # https://core.telegram.org/bots/api#formatting-options
@@ -874,17 +1303,87 @@ ${chart} (${family})
 
 SENT_TELEGRAM=$?
 
+
+# -----------------------------------------------------------------------------
+# send the kafka message
+
+send_kafka
+SENT_KAFKA=$?
+
+
+# -----------------------------------------------------------------------------
+# send the pagerduty.com message
+
+send_pd "${to_pd}"
+SENT_PD=$?
+
+
+# -----------------------------------------------------------------------------
+# send the custom message
+
+send_custom() {
+    # is it enabled?
+    [ "${SEND_CUSTOM}" != "YES" ] && return 1
+
+    # do we have any sender?
+    [ -z "${1}" ] && return 1
+
+    # call the custom_sender function
+    custom_sender "${@}"
+}
+
+send_custom "${to_custom}"
+SENT_CUSTOM=$?
+
+
+# -----------------------------------------------------------------------------
+# send hipchat message
+
+send_hipchat "${HIPCHAT_AUTH_TOKEN}" "${to_hipchat}" " \
+${host} ${status_message}<br/> \
+<b>${alarm}</b> ${info_html}<br/> \
+<b>${chart}</b> (family <b>${family}</b>)<br/> \
+<b>${date}${raised_for_html}</b><br/> \
+<a href=\\\"${goto_url}\\\">View netdata dashboard</a> \
+(source of alarm ${src}) \
+"
+
+SENT_HIPCHAT=$?
+
+
 # -----------------------------------------------------------------------------
 # send the email
 
 send_email <<EOF
 To: ${to_email}
 Subject: ${host} ${status_message} - ${name//_/ } - ${chart}
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="multipart-boundary"
+
+This is a MIME-encoded multipart message
+
+--multipart-boundary
+Content-Type: text/plain
+
+${host} ${status_message}
+
+${alarm} ${info}
+${raised_for}
+
+Chart   : ${chart}
+Family  : ${family}
+Severity: ${severity}
+URL     : ${goto_url}
+Source  : ${src}
+Date    : ${date}
+Notification generated on ${this_host}
+
+--multipart-boundary
 Content-Type: text/html
 
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<html xmlns="http://www.w3.org/1999/xhtml" style="font-family: 'Helvetica Neue', 'Helvetica', Helvetica, Arial, sans-serif; box-sizing: border-box; font-size: 14px; margin: 0; padding: 0;">
-<body style="font-family: 'Helvetica Neue', 'Helvetica', Helvetica, Arial, sans-serif; font-size: 14px; width: 100% !important; min-height: 100%; line-height: 1.6; background: #f6f6f6; margin:0; padding: 0;">
+<html xmlns="http://www.w3.org/1999/xhtml" style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; box-sizing: border-box; font-size: 14px; margin: 0; padding: 0;">
+<body style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 14px; width: 100% !important; min-height: 100%; line-height: 1.6; background: #f6f6f6; margin:0; padding: 0;">
 <table>
     <tbody>
     <tr>
@@ -895,12 +1394,12 @@ Content-Type: text/html
                     <tbody>
                     <tr>
                         <td bgcolor="#eee" style="padding: 5px 20px 5px 20px; background-color: #eee;">
-                            <div style="font-family: 'Helvetica Neue', 'Helvetica', Helvetica, Arial, sans-serif; font-size: 20px; color: #777; font-weight: bold;">netdata notification</div>
+                            <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 20px; color: #777; font-weight: bold;">netdata notification</div>
                         </td>
                     </tr>
                     <tr>
                         <td bgcolor="${color}" style="font-size: 16px; vertical-align: top; font-weight: 400; text-align: center; margin: 0; padding: 10px; color: #ffffff; background: ${color} !important; border: 1px solid ${color}; border-top-color: ${color};" align="center" valign="top">
-                            <h1 style="font-family: 'Helvetica Neue', 'Helvetica', Helvetica, Arial, sans-serif; font-weight: 400; margin: 0;">${host} ${status_message}</h1>
+                            <h1 style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-weight: 400; margin: 0;">${host} ${status_message}</h1>
                         </td>
                     </tr>
                     <tr>
@@ -909,46 +1408,46 @@ Content-Type: text/html
                                 <table width="100%" cellpadding="0" cellspacing="0" style="max-width:700px">
                                     <tbody>
                                     <tr>
-                                        <td style="font-family: 'Helvetica Neue', 'Helvetica', Helvetica, Arial, sans-serif; font-size: 18px; vertical-align: top; margin: 0; padding:0 0 20px;" align="left" valign="top">
+                                        <td style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 18px; vertical-align: top; margin: 0; padding:0 0 20px;" align="left" valign="top">
                                             <span>${chart}</span>
                                             <span style="display: block; color: #666666; font-size: 12px; font-weight: 300; line-height: 1; text-transform: uppercase;">Chart</span>
                                         </td>
                                     </tr>
                                     <tr style="margin: 0; padding: 0;">
-                                        <td style="font-family: 'Helvetica Neue', 'Helvetica', Helvetica, Arial, sans-serif; font-size: 18px; vertical-align: top; margin: 0; padding: 0 0 20px;" align="left" valign="top">
+                                        <td style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 18px; vertical-align: top; margin: 0; padding: 0 0 20px;" align="left" valign="top">
                                             <span><b>${alarm}</b>${info_html}</span>
                                             <span style="display: block; color: #666666; font-size: 12px; font-weight: 300; line-height: 1; text-transform: uppercase;">Alarm</span>
                                         </td>
                                     </tr>
                                     <tr>
-                                        <td style="font-family: 'Helvetica Neue', 'Helvetica', Helvetica, Arial, sans-serif; font-size: 18px; vertical-align: top; margin: 0; padding: 0 0 20px;" align="left" valign="top">
+                                        <td style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 18px; vertical-align: top; margin: 0; padding: 0 0 20px;" align="left" valign="top">
                                             <span>${family}</span>
                                             <span style="display: block; color: #666666; font-size: 12px; font-weight: 300; line-height: 1; text-transform: uppercase;">Family</span>
                                         </td>
                                     </tr>
                                     <tr style="margin: 0; padding: 0;">
-                                        <td style="font-family: 'Helvetica Neue', 'Helvetica', Helvetica, Arial, sans-serif; font-size: 18px; vertical-align: top; margin: 0; padding: 0 0 20px;" align="left" valign="top">
+                                        <td style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 18px; vertical-align: top; margin: 0; padding: 0 0 20px;" align="left" valign="top">
                                             <span>${severity}</span>
                                             <span style="display: block; color: #666666; font-size: 12px; font-weight: 300; line-height: 1; text-transform: uppercase;">Severity</span>
                                         </td>
                                     </tr>
                                     <tr style="margin: 0; padding: 0;">
-                                        <td style="font-family: 'Helvetica Neue', 'Helvetica', Helvetica, Arial, sans-serif; font-size: 18px; vertical-align: top; margin: 0; padding: 0 0 20px;" align="left" valign="top"><span>${date}</span>
+                                        <td style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 18px; vertical-align: top; margin: 0; padding: 0 0 20px;" align="left" valign="top"><span>${date}</span>
                                             <span>${raised_for_html}</span> <span style="display: block; color: #666666; font-size: 12px; font-weight: 300; line-height: 1; text-transform: uppercase;">Time</span>
                                         </td>
                                     </tr>
                                     <tr style="margin: 0; padding: 0;">
-                                        <td style="font-family: 'Helvetica Neue', 'Helvetica', Helvetica, Arial, sans-serif; font-size: 18px; vertical-align: top; margin: 0; padding: 0 0 20px;">
+                                        <td style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 18px; vertical-align: top; margin: 0; padding: 0 0 20px;">
                                             <a href="${goto_url}" style="font-size: 14px; color: #ffffff; text-decoration: none; line-height: 1.5; font-weight: bold; text-align: center; display: inline-block; text-transform: capitalize; background: #35568d; border-width: 1px; border-style: solid; border-color: #2b4c86; margin: 0; padding: 10px 15px;" target="_blank">View Netdata</a>
                                         </td>
                                     </tr>
                                     <tr style="text-align: center; margin: 0; padding: 0;">
-                                        <td style="font-family: 'Helvetica Neue', 'Helvetica', Helvetica, Arial, sans-serif; font-size: 11px; vertical-align: top; margin: 0; padding: 10px 0 0 0; color: #666666;" align="center" valign="bottom">The source of this alarm is line <code>${src}</code>
+                                        <td style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 11px; vertical-align: top; margin: 0; padding: 10px 0 0 0; color: #666666;" align="center" valign="bottom">The source of this alarm is line <code>${src}</code><br/>(alarms are configurable, edit this file to adapt the alarm to your needs)
                                         </td>
                                     </tr>
                                     <tr style="text-align: center; margin: 0; padding: 0;">
-                                        <td style="font-family: 'Helvetica Neue', 'Helvetica', Helvetica, Arial, sans-serif; font-size: 12px; vertical-align: top; margin:0; padding: 20px 0 0 0; color: #666666; border-top: 1px solid #f0f0f0;" align="center" valign="bottom">Sent by
-                                            <a href="https://mynetdata.io/" target="_blank">netdata</a>, the real-time performance monitoring.
+                                        <td style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 12px; vertical-align: top; margin:0; padding: 20px 0 0 0; color: #666666; border-top: 1px solid #f0f0f0;" align="center" valign="bottom">Sent by
+                                            <a href="https://mynetdata.io/" target="_blank">netdata</a>, the real-time performance and health monitoring, on <code>${this_host}</code>.
                                         </td>
                                     </tr>
                                     </tbody>
@@ -972,8 +1471,24 @@ SENT_EMAIL=$?
 # -----------------------------------------------------------------------------
 # let netdata know
 
-# we did send something
-[ ${SENT_EMAIL} -eq 0 -o ${SENT_PUSHOVER} -eq 0 -o ${SENT_TELEGRAM} -eq 0 -o ${SENT_SLACK} -eq 0 -o ${SENT_TWILIO} -eq 0 -o  ${SENT_PUSHBULLET} -eq 0 ] && exit 0
+if [   ${SENT_EMAIL}        -eq 0 \
+    -o ${SENT_PUSHOVER}     -eq 0 \
+    -o ${SENT_TELEGRAM}     -eq 0 \
+    -o ${SENT_SLACK}        -eq 0 \
+    -o ${SENT_DISCORD}      -eq 0 \
+    -o ${SENT_TWILIO}       -eq 0 \
+    -o ${SENT_HIPCHAT}      -eq 0 \
+    -o ${SENT_MESSAGEBIRD}  -eq 0 \
+    -o ${SENT_PUSHBULLET}   -eq 0 \
+    -o ${SENT_KAFKA}        -eq 0 \
+    -o ${SENT_PD}           -eq 0 \
+    -o ${SENT_CUSTOM}       -eq 0 \
+    ]
+    then
+    # we did send something
+    exit 0
+fi
 
 # we did not send anything
 exit 1
+

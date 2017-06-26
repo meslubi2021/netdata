@@ -57,7 +57,7 @@ static inline int ipc_sem_get_limits(struct ipc_limits *lim) {
     static char filename[FILENAME_MAX + 1] = "";
 
     if(unlikely(!filename[0]))
-        snprintfz(filename, FILENAME_MAX, "%s/proc/sys/kernel/sem", global_host_prefix);
+        snprintfz(filename, FILENAME_MAX, "%s/proc/sys/kernel/sem", netdata_configured_host_prefix);
 
     if(unlikely(!ff)) {
         ff = procfile_open(filename, NULL, PROCFILE_FLAG_DEFAULT);
@@ -81,10 +81,10 @@ static inline int ipc_sem_get_limits(struct ipc_limits *lim) {
 
     if(procfile_lines(ff) >= 1 && procfile_linewords(ff, 0) >= 4) {
         lim->semvmx = SEMVMX;
-        lim->semmsl = atoi(procfile_lineword(ff, 0, 0));
-        lim->semmns = atoi(procfile_lineword(ff, 0, 1));
-        lim->semopm = atoi(procfile_lineword(ff, 0, 2));
-        lim->semmni = atoi(procfile_lineword(ff, 0, 3));
+        lim->semmsl = str2i(procfile_lineword(ff, 0, 0));
+        lim->semmns = str2i(procfile_lineword(ff, 0, 1));
+        lim->semopm = str2i(procfile_lineword(ff, 0, 2));
+        lim->semmni = str2i(procfile_lineword(ff, 0, 3));
         return 0;
     }
     else {
@@ -160,7 +160,7 @@ static inline int ipc_sem_get_status(struct ipc_status *st) {
     return 0;
 }
 
-int do_ipc(int update_every, unsigned long long dt) {
+int do_ipc(int update_every, usec_t dt) {
     (void)dt;
 
     static int initialized = 0, read_limits_next = 0;
@@ -184,23 +184,27 @@ int do_ipc(int update_every, unsigned long long dt) {
             return 1;
         }
 
-        arrays_max     = rrdvar_custom_host_variable_create(&localhost, "ipc.semaphores.arrays.max");
-        semaphores_max = rrdvar_custom_host_variable_create(&localhost, "ipc.semaphores.max");
+        arrays_max     = rrdvar_custom_host_variable_create(localhost, "ipc.semaphores.arrays.max");
+        semaphores_max = rrdvar_custom_host_variable_create(localhost, "ipc.semaphores.max");
 
         if(arrays_max)     rrdvar_custom_host_variable_set(arrays_max, limits.semmni);
         if(semaphores_max) rrdvar_custom_host_variable_set(semaphores_max, limits.semmns);
 
         // create the charts
-        semaphores = rrdset_find("system.ipc_semaphores");
+        semaphores = rrdset_find_localhost("system.ipc_semaphores");
         if(!semaphores) {
-            semaphores = rrdset_create("system", "ipc_semaphores", NULL, "ipc semaphores", NULL, "IPC Semaphores", "semaphores", 1000, rrd_update_every, RRDSET_TYPE_AREA);
-            rrddim_add(semaphores, "semaphores", NULL, 1, 1, RRDDIM_ABSOLUTE);
+            semaphores = rrdset_create_localhost("system", "ipc_semaphores", NULL, "ipc semaphores", NULL
+                                                 , "IPC Semaphores", "semaphores", 1000, localhost->rrd_update_every
+                                                 , RRDSET_TYPE_AREA);
+            rrddim_add(semaphores, "semaphores", NULL, 1, 1, RRD_ALGORITHM_ABSOLUTE);
         }
 
-        arrays = rrdset_find("system.ipc_semaphore_arrays");
+        arrays = rrdset_find_localhost("system.ipc_semaphore_arrays");
         if(!arrays) {
-            arrays = rrdset_create("system", "ipc_semaphore_arrays", NULL, "ipc semaphores", NULL, "IPC Semaphore Arrays", "arrays", 1000, rrd_update_every, RRDSET_TYPE_AREA);
-            rrddim_add(arrays, "arrays", NULL, 1, 1, RRDDIM_ABSOLUTE);
+            arrays = rrdset_create_localhost("system", "ipc_semaphore_arrays", NULL, "ipc semaphores", NULL
+                                             , "IPC Semaphore Arrays", "arrays", 1000, localhost->rrd_update_every
+                                             , RRDSET_TYPE_AREA);
+            rrddim_add(arrays, "arrays", NULL, 1, 1, RRD_ALGORITHM_ABSOLUTE);
         }
     }
 
@@ -209,8 +213,8 @@ int do_ipc(int update_every, unsigned long long dt) {
             error("Unable to fetch semaphore limits.");
         }
         else {
-            rrdvar_custom_host_variable_set(arrays_max, limits.semmni);
-            rrdvar_custom_host_variable_set(semaphores_max, limits.semmns);
+            if(arrays_max)     rrdvar_custom_host_variable_set(arrays_max, limits.semmni);
+            if(semaphores_max) rrdvar_custom_host_variable_set(semaphores_max, limits.semmns);
 
             arrays->red = limits.semmni;
             semaphores->red = limits.semmns;

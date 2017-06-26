@@ -5,12 +5,20 @@
 extern int web_client_timeout;
 
 #ifdef NETDATA_WITH_ZLIB
-extern int web_enable_gzip, web_gzip_level, web_gzip_strategy, web_donotrack_comply;
+extern int web_enable_gzip,
+        web_gzip_level,
+        web_gzip_strategy;
 #endif /* NETDATA_WITH_ZLIB */
 
-#define WEB_CLIENT_MODE_NORMAL      0
-#define WEB_CLIENT_MODE_FILECOPY    1
-#define WEB_CLIENT_MODE_OPTIONS     2
+extern int respect_web_browser_do_not_track_policy;
+extern char *web_x_frame_options;
+
+typedef enum web_client_mode {
+    WEB_CLIENT_MODE_NORMAL      = 0,
+    WEB_CLIENT_MODE_FILECOPY    = 1,
+    WEB_CLIENT_MODE_OPTIONS     = 2,
+    WEB_CLIENT_MODE_STREAM      = 3
+} WEB_CLIENT_MODE;
 
 #define URL_MAX 8192
 #define ZLIB_CHUNK  16384
@@ -50,13 +58,13 @@ struct web_client {
 
     uint8_t keepalive:1;                // if set to 1, the web client will be re-used
 
-    uint8_t mode:3;                     // the operational mode of the client
-
     uint8_t wait_receive:1;             // 1 = we are waiting more input data
     uint8_t wait_send:1;                // 1 = we have data to send to the client
 
     uint8_t donottrack:1;               // 1 = we should not set cookies on this client
     uint8_t tracking_required:1;        // 1 = if the request requires cookies
+
+    WEB_CLIENT_MODE mode;               // the operational mode of the client
 
     int tcp_cork;                       // 1 = we have a cork on the socket
 
@@ -75,7 +83,6 @@ struct web_client {
     char cookie2[COOKIE_MAX+1];
     char origin[ORIGIN_MAX+1];
 
-    struct sockaddr_storage clientaddr;
     struct response response;
 
     size_t stats_received_bytes;
@@ -98,7 +105,7 @@ extern struct web_client *web_client_create(int listener);
 extern struct web_client *web_client_free(struct web_client *w);
 extern ssize_t web_client_send(struct web_client *w);
 extern ssize_t web_client_receive(struct web_client *w);
-extern void web_client_process(struct web_client *w);
+extern void web_client_process_request(struct web_client *w);
 extern void web_client_reset(struct web_client *w);
 
 extern void *web_client_main(void *ptr);
@@ -107,4 +114,7 @@ extern int web_client_api_request_v1_data_group(char *name, int def);
 extern const char *group_method2string(int group);
 
 extern void buffer_data_options2string(BUFFER *wb, uint32_t options);
+
+extern int mysendfile(struct web_client *w, char *filename);
+
 #endif

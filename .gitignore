@@ -25,10 +25,13 @@ stamp-h1
 
 netdata
 apps.plugin
+freeipmi.plugin
 netdata.spec
 
 *.tar.*
 
+cmake-build-debug/
+makeself/tmp/
 sitespeed-result/
 cov-int/
 netdata-coverity-analysis.tgz
@@ -37,6 +40,7 @@ netdata-coverity-analysis.tgz
 
 .cproject
 .idea/
+.vscode/
 .project
 README
 TODO.md
@@ -84,11 +88,14 @@ cmake_install.cmake
 
 .jetbrains*
 
+.DS_Store
+
 contrib/debian/changelog
 profile/benchmark-dictionary
 profile/benchmark-registry
 
 *.pyc
+*.run
 
 diagrams/*.png
 diagrams/*.svg

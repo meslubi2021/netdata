@@ -7,6 +7,7 @@
 #define MOUNTINFO_IS_SAME_DEV   0x00000008
 #define MOUNTINFO_NO_STAT       0x00000010
 #define MOUNTINFO_NO_SIZE       0x00000020
+#define MOUNTINFO_READONLY      0x00000040
 
 struct mountinfo {
     long id;                // mount ID: unique identifier of the mount (may be reused after umount(2)).
@@ -49,6 +50,6 @@ extern struct mountinfo *mountinfo_find_by_filesystem_mount_source(struct mounti
 extern struct mountinfo *mountinfo_find_by_filesystem_super_option(struct mountinfo *root, const char *filesystem, const char *super_options);
 
 extern void mountinfo_free(struct mountinfo *mi);
-extern struct mountinfo *mountinfo_read();
+extern struct mountinfo *mountinfo_read(int do_statvfs);
 
 #endif /* NETDATA_PROC_SELF_MOUNTINFO_H */
