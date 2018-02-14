@@ -13,9 +13,9 @@
 // #define AVL_LOCK_WITH_MUTEX 1
 
 #ifdef AVL_LOCK_WITH_MUTEX
-#define AVL_LOCK_INITIALIZER PTHREAD_MUTEX_INITIALIZER
+#define AVL_LOCK_INITIALIZER NETDATA_MUTEX_INITIALIZER
 #else /* AVL_LOCK_WITH_MUTEX */
-#define AVL_LOCK_INITIALIZER PTHREAD_RWLOCK_INITIALIZER
+#define AVL_LOCK_INITIALIZER NETDATA_RWLOCK_INITIALIZER
 #endif /* AVL_LOCK_WITH_MUTEX */
 
 #else /* AVL_WITHOUT_PTHREADS */
@@ -41,9 +41,9 @@ typedef struct avl_tree_lock {
 
 #ifndef AVL_WITHOUT_PTHREADS
 #ifdef AVL_LOCK_WITH_MUTEX
-    pthread_mutex_t mutex;
+    netdata_mutex_t mutex;
 #else /* AVL_LOCK_WITH_MUTEX */
-    pthread_rwlock_t rwlock;
+    netdata_rwlock_t rwlock;
 #endif /* AVL_LOCK_WITH_MUTEX */
 #endif /* AVL_WITHOUT_PTHREADS */
 } avl_tree_lock;
@@ -56,16 +56,16 @@ typedef struct avl_tree_lock {
  * a is linked directly to the tree, so it has to
  * be properly allocated by the caller.
  */
-avl *avl_insert_lock(avl_tree_lock *t, avl *a);
-avl *avl_insert(avl_tree *t, avl *a);
+avl *avl_insert_lock(avl_tree_lock *t, avl *a) NEVERNULL WARNUNUSED;
+avl *avl_insert(avl_tree *t, avl *a) NEVERNULL WARNUNUSED;
 
 /* Remove an element a from the AVL tree t
  * returns a pointer to the removed element
  * or NULL if an element equal to a is not found
  * (equal as returned by t->compar())
  */
-avl *avl_remove_lock(avl_tree_lock *t, avl *a);
-avl *avl_remove(avl_tree *t, avl *a);
+avl *avl_remove_lock(avl_tree_lock *t, avl *a) WARNUNUSED;
+avl *avl_remove(avl_tree *t, avl *a) WARNUNUSED;
 
 /* Find the element into the tree that equal to a
  * (equal as returned by t->compar())
@@ -80,7 +80,7 @@ void avl_init_lock(avl_tree_lock *t, int (*compar)(void *a, void *b));
 void avl_init(avl_tree *t, int (*compar)(void *a, void *b));
 
 
-void avl_traverse_lock(avl_tree_lock *t, void (*callback)(void *entry, void *data), void *data);
-void avl_traverse(avl_tree *t, void (*callback)(void *entry, void *data), void *data);
+int avl_traverse_lock(avl_tree_lock *t, int (*callback)(void *entry, void *data), void *data);
+int avl_traverse(avl_tree *t, int (*callback)(void *entry, void *data), void *data);
 
 #endif /* avl.h */

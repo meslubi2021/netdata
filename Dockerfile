@@ -1,7 +1,7 @@
 # author  : titpetric
 # original: https://github.com/titpetric/netdata
 
-FROM debian:jessie
+FROM debian:stretch
 
 ADD . /netdata.git
 

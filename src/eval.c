@@ -102,7 +102,7 @@ static inline calculated_number eval_variable(EVAL_EXPRESSION *exp, EVAL_VARIABL
     }
 
     if(unlikely(v->hash == now_hash && !strcmp(v->name, "now"))) {
-        n = time(NULL);
+        n = now_realtime_sec();
         buffer_strcat(exp->error_msg, "[ $now = ");
         print_parsed_as_constant(exp->error_msg, n);
         buffer_strcat(exp->error_msg, " ] ");
@@ -166,7 +166,7 @@ static inline calculated_number eval_variable(EVAL_EXPRESSION *exp, EVAL_VARIABL
     }
 
     if(exp->rrdcalc && health_variable_lookup(v->name, v->hash, exp->rrdcalc, &n)) {
-        buffer_sprintf(exp->error_msg, "[ $%s = ", v->name);
+        buffer_sprintf(exp->error_msg, "[ ${%s} = ", v->name);
         print_parsed_as_constant(exp->error_msg, n);
         buffer_strcat(exp->error_msg, " ] ");
         return n;
@@ -232,7 +232,7 @@ calculated_number eval_equal(EVAL_EXPRESSION *exp, EVAL_NODE *op, int *error) {
     if(isinf(n1) && isinf(n2)) return 1;
     if(isnan(n1) || isnan(n2)) return 0;
     if(isinf(n1) || isinf(n2)) return 0;
-    return n1 == n2;
+    return calculated_number_equal(n1, n2);
 }
 calculated_number eval_not_equal(EVAL_EXPRESSION *exp, EVAL_NODE *op, int *error) {
     return !eval_equal(exp, op, error);
@@ -355,7 +355,7 @@ static inline calculated_number eval_node(EVAL_EXPRESSION *exp, EVAL_NODE *op, i
 
 static inline void print_parsed_as_variable(BUFFER *out, EVAL_VARIABLE *v, int *error) {
     (void)error;
-    buffer_sprintf(out, "$%s", v->name);
+    buffer_sprintf(out, "${%s}", v->name);
 }
 
 static inline void print_parsed_as_constant(BUFFER *out, calculated_number n) {
@@ -703,17 +703,31 @@ static inline int parse_variable(const char **string, char *buffer, size_t len) 
     const char *s = *string;
 
     // $
-    if(s[0] == '$') {
+    if(*s == '$') {
         size_t i = 0;
         s++;
 
-        while(*s && !isvariableterm(*s) && i < len)
-            buffer[i++] = *s++;
+        if(*s == '{') {
+            // ${variable_name}
+
+            s++;
+            while (*s && *s != '}' && i < len)
+                buffer[i++] = *s++;
+
+            if(*s == '}')
+                s++;
+        }
+        else {
+            // $variable_name
+
+            while (*s && !isvariableterm(*s) && i < len)
+                buffer[i++] = *s++;
+        }
 
         buffer[i] = '\0';
 
-        if(buffer[0]) {
-            *string = &s[0];
+        if (buffer[0]) {
+            *string = s;
             return 1;
         }
     }
@@ -723,7 +737,7 @@ static inline int parse_variable(const char **string, char *buffer, size_t len) 
 
 static inline int parse_constant(const char **string, calculated_number *number) {
     char *end = NULL;
-    calculated_number n = strtold(*string, &end);
+    calculated_number n = str2ld(*string, &end);
     if(unlikely(!end || *string == end)) {
         *number = 0;
         return 0;

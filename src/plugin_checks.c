@@ -1,47 +1,89 @@
 #include "common.h"
 
-void *checks_main(void *ptr)
-{
-    if(ptr) { ; }
+#ifdef NETDATA_INTERNAL_CHECKS
 
-    info("CHECKS thread created with task id %d", gettid());
+static void checks_main_cleanup(void *ptr) {
+    struct netdata_static_thread *static_thread = (struct netdata_static_thread *)ptr;
+    static_thread->enabled = NETDATA_MAIN_THREAD_EXITING;
 
-    if(pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL) != 0)
-        error("Cannot set pthread cancel type to DEFERRED.");
+    info("cleaning up...");
 
-    if(pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL) != 0)
-        error("Cannot set pthread cancel state to ENABLE.");
+    static_thread->enabled = NETDATA_MAIN_THREAD_EXITED;
+}
 
-    unsigned long long usec = 0, susec = rrd_update_every * 1000000ULL, loop_usec = 0, total_susec = 0;
+void *checks_main(void *ptr) {
+    netdata_thread_cleanup_push(checks_main_cleanup, ptr);
+
+    usec_t usec = 0, susec = localhost->rrd_update_every * USEC_PER_SEC, loop_usec = 0, total_susec = 0;
     struct timeval now, last, loop;
 
     RRDSET *check1, *check2, *check3, *apps_cpu = NULL;
 
-    check1 = rrdset_create("netdata", "check1", NULL, "netdata", NULL, "Caller gives microseconds", "a million !", 99999, rrd_update_every, RRDSET_TYPE_LINE);
-    rrddim_add(check1, "absolute", NULL, -1, 1, RRDDIM_ABSOLUTE);
-    rrddim_add(check1, "incremental", NULL, 1, 1, RRDDIM_INCREMENTAL);
+    check1 = rrdset_create_localhost(
+            "netdata"
+            , "check1"
+            , NULL
+            , "netdata"
+            , NULL
+            , "Caller gives microseconds"
+            , "a million !"
+            , "netdata"
+            , "checks"
+            , 99999
+            , localhost->rrd_update_every
+            , RRDSET_TYPE_LINE
+    );
 
-    check2 = rrdset_create("netdata", "check2", NULL, "netdata", NULL, "Netdata calcs microseconds", "a million !", 99999, rrd_update_every, RRDSET_TYPE_LINE);
-    rrddim_add(check2, "absolute", NULL, -1, 1, RRDDIM_ABSOLUTE);
-    rrddim_add(check2, "incremental", NULL, 1, 1, RRDDIM_INCREMENTAL);
+    rrddim_add(check1, "absolute", NULL, -1, 1, RRD_ALGORITHM_ABSOLUTE);
+    rrddim_add(check1, "incremental", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
 
-    check3 = rrdset_create("netdata", "checkdt", NULL, "netdata", NULL, "Clock difference", "microseconds diff", 99999, rrd_update_every, RRDSET_TYPE_LINE);
-    rrddim_add(check3, "caller", NULL, 1, 1, RRDDIM_ABSOLUTE);
-    rrddim_add(check3, "netdata", NULL, 1, 1, RRDDIM_ABSOLUTE);
-    rrddim_add(check3, "apps.plugin", NULL, 1, 1, RRDDIM_ABSOLUTE);
+    check2 = rrdset_create_localhost(
+            "netdata"
+            , "check2"
+            , NULL
+            , "netdata"
+            , NULL
+            , "Netdata calcs microseconds"
+            , "a million !"
+            , "netdata"
+            , "checks"
+            , 99999
+            , localhost->rrd_update_every
+            , RRDSET_TYPE_LINE
+    );
+    rrddim_add(check2, "absolute", NULL, -1, 1, RRD_ALGORITHM_ABSOLUTE);
+    rrddim_add(check2, "incremental", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
 
-    gettimeofday(&last, NULL);
-    while(1) {
+    check3 = rrdset_create_localhost(
+            "netdata"
+            , "checkdt"
+            , NULL
+            , "netdata"
+            , NULL
+            , "Clock difference"
+            , "microseconds diff"
+            , "netdata"
+            , "checks"
+            , 99999
+            , localhost->rrd_update_every
+            , RRDSET_TYPE_LINE
+    );
+    rrddim_add(check3, "caller", NULL, 1, 1, RRD_ALGORITHM_ABSOLUTE);
+    rrddim_add(check3, "netdata", NULL, 1, 1, RRD_ALGORITHM_ABSOLUTE);
+    rrddim_add(check3, "apps.plugin", NULL, 1, 1, RRD_ALGORITHM_ABSOLUTE);
+
+    now_realtime_timeval(&last);
+    while(!netdata_exit) {
         usleep(susec);
 
         // find the time to sleep in order to wait exactly update_every seconds
-        gettimeofday(&now, NULL);
-        loop_usec = usec_dt(&now, &last);
+        now_realtime_timeval(&now);
+        loop_usec = dt_usec(&now, &last);
         usec = loop_usec - susec;
         debug(D_PROCNETDEV_LOOP, "CHECK: last loop took %llu usec (worked for %llu, sleeped for %llu).", loop_usec, usec, susec);
 
-        if(usec < (rrd_update_every * 1000000ULL / 2ULL)) susec = (rrd_update_every * 1000000ULL) - usec;
-        else susec = rrd_update_every * 1000000ULL / 2ULL;
+        if(usec < (localhost->rrd_update_every * USEC_PER_SEC / 2ULL)) susec = (localhost->rrd_update_every * USEC_PER_SEC) - usec;
+        else susec = localhost->rrd_update_every * USEC_PER_SEC / 2ULL;
 
         // --------------------------------------------------------------------
         // Calculate loop time
@@ -69,16 +111,17 @@ void *checks_main(void *ptr)
         // --------------------------------------------------------------------
         // check chart 3
 
-        if(!apps_cpu) apps_cpu = rrdset_find("apps.cpu");
+        if(!apps_cpu) apps_cpu = rrdset_find_localhost("apps.cpu");
         if(check3->counter_done) rrdset_next_usec(check3, loop_usec);
-        gettimeofday(&loop, NULL);
-        rrddim_set(check3, "caller", (long long) usec_dt(&loop, &check1->last_collected_time));
-        rrddim_set(check3, "netdata", (long long) usec_dt(&loop, &check2->last_collected_time));
-        if(apps_cpu) rrddim_set(check3, "apps.plugin", (long long) usec_dt(&loop, &apps_cpu->last_collected_time));
+        now_realtime_timeval(&loop);
+        rrddim_set(check3, "caller", (long long) dt_usec(&loop, &check1->last_collected_time));
+        rrddim_set(check3, "netdata", (long long) dt_usec(&loop, &check2->last_collected_time));
+        if(apps_cpu) rrddim_set(check3, "apps.plugin", (long long) dt_usec(&loop, &apps_cpu->last_collected_time));
         rrdset_done(check3);
     }
 
-    pthread_exit(NULL);
+    netdata_thread_cleanup_pop(1);
     return NULL;
 }
 
+#endif // NETDATA_INTERNAL_CHECKS

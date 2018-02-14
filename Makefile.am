@@ -18,17 +18,38 @@ MAINTAINERCLEANFILES= \
 
 EXTRA_DIST = \
 	.gitignore \
+	.codacy.yml \
+	.codeclimate.yml \
+	.csslintrc \
+	.eslintignore \
+	.eslintrc \
+	.travis \
+	m4/jemalloc.m4 \
+    m4/ax_c___atomic.m4 \
+    m4/ax_check_enable_debug.m4 \
+    m4/ax_c_mallinfo.m4 \
+    m4/ax_gcc_func_attribute.m4 \
+    m4/ax_check_compile_flag.m4 \
+    m4/ax_c_statement_expressions.m4 \
+    m4/ax_pthread.m4 \
+    m4/ax_c_lto.m4 \
+    m4/ax_c_mallopt.m4 \
+    m4/tcmalloc.m4 \
+    m4/ax_c__generic.m4 \
 	autogen.sh \
 	README.md \
+	LICENSE \
 	LICENSE.md \
+	LICENSE-REDISTRIBUTED.md \
 	COPYING \
 	autogen.sh \
-	tests/stress.sh \
 	$(NULL)
 
 SUBDIRS = \
 	charts.d \
 	conf.d \
+	diagrams \
+	makeself \
 	node.d \
 	plugins.d \
 	python.d \
@@ -36,21 +57,26 @@ SUBDIRS = \
 	system \
 	web \
 	contrib \
+	tests \
 	$(NULL)
 
 dist_noinst_DATA= \
-	diagrams/config.puml \
-	diagrams/registry.puml \
+	cppcheck.sh \
 	configs.signatures \
 	Dockerfile \
+	Dockerfile.armv7hf \
+	netdata.cppcheck \
 	netdata.spec \
+	package.json \
 	$(NULL)
 
 # until integrated within build
 # should be proper init.d/openrc/systemd usable
 dist_noinst_SCRIPTS= \
-	diagrams/build.sh \
 	coverity-scan.sh \
 	docker-build.sh \
+	kickstart.sh \
+	kickstart-static64.sh \
 	netdata-installer.sh \
+	installer/functions.sh \
 	$(NULL)

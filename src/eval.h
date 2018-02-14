@@ -6,7 +6,6 @@
 typedef struct eval_variable {
     char *name;
     uint32_t hash;
-    struct rrdvar *rrdvar;
     struct eval_variable *next;
 } EVAL_VARIABLE;
 
@@ -14,7 +13,7 @@ typedef struct eval_expression {
     const char *source;
     const char *parsed_as;
 
-    int *status;
+    RRDCALC_STATUS *status;
     calculated_number *this;
     time_t *after;
     time_t *before;

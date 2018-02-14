@@ -2,11 +2,9 @@
 # Description: tomcat netdata python.d module
 # Author: Pawel Krupa (paulfantom)
 
-# Python version higher than 2.7 is needed to run this module.
+import xml.etree.ElementTree as ET
 
-from base import UrlService
-import xml.etree.ElementTree as ET  # phone home...
-#from xml.parsers.expat import errors
+from bases.FrameworkServices.UrlService import UrlService
 
 # default module values (can be overridden per job in `config`)
 # update_every = 2
@@ -14,98 +12,142 @@ priority = 60000
 retries = 60
 
 # charts order (can be overridden if you want less charts, or different order)
-ORDER = ['accesses', 'volume', 'threads', 'jvm']
+ORDER = ['accesses', 'bandwidth', 'processing_time', 'threads', 'jvm', 'jvm_eden', 'jvm_survivor', 'jvm_tenured']
 
 CHARTS = {
     'accesses': {
         'options': [None, "Requests", "requests/s", "statistics", "tomcat.accesses", "area"],
         'lines': [
-            ["accesses", None, 'incremental']
+            ["requestCount", 'accesses', 'incremental'],
+            ["errorCount", 'errors', 'incremental'],
         ]},
-    'volume': {
-        'options': [None, "Volume", "KB/s", "volume", "tomcat.volume", "area"],
+    'bandwidth': {
+        'options': [None, "Bandwidth", "KB/s", "statistics", "tomcat.bandwidth", "area"],
         'lines': [
-            ["volume", None, 'incremental', 1, 1024]
+            ["bytesSent", 'sent', 'incremental', 1, 1024],
+            ["bytesReceived", 'received', 'incremental', 1, 1024],
+        ]},
+    'processing_time': {
+        'options': [None, "processing time", "seconds", "statistics", "tomcat.processing_time", "area"],
+        'lines': [
+            ["processingTime", 'processing time', 'incremental', 1, 1000]
         ]},
     'threads': {
-        'options': [None, "Threads", "current threads", "statistics", "tomcat.threads", "line"],
+        'options': [None, "Threads", "current threads", "statistics", "tomcat.threads", "area"],
         'lines': [
-            ["current", None, "absolute"],
-            ["busy", None, "absolute"]
+            ["currentThreadCount", 'current', "absolute"],
+            ["currentThreadsBusy", 'busy', "absolute"]
         ]},
     'jvm': {
-        'options': [None, "JVM Free Memory", "MB", "statistics", "tomcat.jvm", "area"],
+        'options': [None, "JVM Memory Pool Usage", "MB", "memory", "tomcat.jvm", "stacked"],
         'lines': [
-            ["jvm", None, "absolute", 1, 1048576]
-        ]}
+            ["free", 'free', "absolute", 1, 1048576],
+            ["eden_used", 'eden', "absolute", 1, 1048576],
+            ["survivor_used", 'survivor', "absolute", 1, 1048576],
+            ["tenured_used", 'tenured', "absolute", 1, 1048576],
+            ["code_cache_used", 'code cache', "absolute", 1, 1048576],
+            ["compressed_used", 'compressed', "absolute", 1, 1048576],
+            ["metaspace_used", 'metaspace', "absolute", 1, 1048576],
+        ]},
+    'jvm_eden': {
+        'options': [None, "Eden Memory Usage", "MB", "memory", "tomcat.jvm_eden", "area"],
+        'lines': [
+            ["eden_used", 'used', "absolute", 1, 1048576],
+            ["eden_commited", 'commited', "absolute", 1, 1048576],
+            ["eden_max", 'max', "absolute", 1, 1048576]
+        ]},
+    'jvm_survivor': {
+        'options': [None, "Survivor Memory Usage", "MB", "memory", "tomcat.jvm_survivor", "area"],
+        'lines': [
+            ["survivor_used", 'used', "absolute", 1, 1048576],
+            ["survivor_commited", 'commited', "absolute", 1, 1048576],
+            ["survivor_max", 'max', "absolute", 1, 1048576]
+        ]},
+    'jvm_tenured': {
+        'options': [None, "Tenured Memory Usage", "MB", "memory", "tomcat.jvm_tenured", "area"],
+        'lines': [
+            ["tenured_used", 'used', "absolute", 1, 1048576],
+            ["tenured_commited", 'commited', "absolute", 1, 1048576],
+            ["tenured_max", 'max', "absolute", 1, 1048576]
+        ]},
 }
 
 
 class Service(UrlService):
     def __init__(self, configuration=None, name=None):
         UrlService.__init__(self, configuration=configuration, name=name)
-        if len(self.url) == 0:
-            self.url = "http://localhost:8080/manager/status?XML=true"
+        self.url = self.configuration.get('url', "http://127.0.0.1:8080/manager/status?XML=true")
+        self.connector_name = self.configuration.get('connector_name', None)
         self.order = ORDER
         self.definitions = CHARTS
-        self.port = 8080
-
-    def check(self):
-        if UrlService.check(self):
-            return True
-
-        # get port from url
-        self.port = 0
-        for i in self.url.split('/'):
-            try:
-                int(i[-1])
-                self.port = i.split(':')[-1]
-                break
-            except:
-                pass
-        if self.port == 0:
-            self.port = 80
-
-        test = self._get_data()
-        if test is None or len(test) == 0:
-            return False
-        else:
-            return True
 
     def _get_data(self):
         """
         Format data received from http request
         :return: dict
         """
-        try:
-            raw = self._get_raw_data()
+        data = None
+        raw_data = self._get_raw_data()
+        if raw_data:
             try:
-                data = ET.fromstring(raw)
-            except ET.ParseError as e:
-                # if e.code == errors.codes[errors.XML_ERROR_JUNK_AFTER_DOC_ELEMENT]:
-                if e.code == 9:
-                    end = raw.find('</status>')
-                    end += 9
-                    raw = raw[:end]
-                    self.debug(raw)
-                    data = ET.fromstring(raw)
-                else:
-                    raise Exception(e)
+                xml = ET.fromstring(raw_data)
+            except ET.ParseError:
+                self.debug('%s is not a vaild XML page. Please add "?XML=true" to tomcat status page.' % self.url)
+                return None
+            data = {}
 
-            memory = data.find('./jvm/memory')
-            threads = data.find("./connector[@name='\"http-bio-" + str(self.port) + "\"']/threadInfo")
-            requests = data.find("./connector[@name='\"http-bio-" + str(self.port) + "\"']/requestInfo")
+            jvm = xml.find('jvm')
 
-            return {'accesses': requests.attrib['requestCount'],
-                    'volume': requests.attrib['bytesSent'],
-                    'current': threads.attrib['currentThreadCount'],
-                    'busy': threads.attrib['currentThreadsBusy'],
-                    'jvm': memory.attrib['free']}
-        except (ValueError, AttributeError) as e:
-            self.debug(str(e))
-            return None
-        except SyntaxError as e:
-            self.error("Tomcat module needs python 2.7 at least. Stopping")
-            self.debug(str(e))
-        except Exception as e:
-            self.debug(str(e))
+            connector = None
+            if self.connector_name:
+                for conn in xml.findall('connector'):
+                    if self.connector_name in conn.get('name'):
+                        connector = conn
+                        break
+            else:
+                connector = xml.find('connector')
+
+            memory = jvm.find('memory')
+            data['free'] = memory.get('free')
+            data['total'] = memory.get('total')
+
+            for pool in jvm.findall('memorypool'):
+                name = pool.get('name')
+                if 'Eden Space' in name:
+                    data['eden_used'] = pool.get('usageUsed')
+                    data['eden_commited'] = pool.get('usageCommitted')
+                    data['eden_max'] = pool.get('usageMax')
+                elif 'Survivor Space' in name:
+                    data['survivor_used'] = pool.get('usageUsed')
+                    data['survivor_commited'] = pool.get('usageCommitted')
+                    data['survivor_max'] = pool.get('usageMax')
+                elif 'Tenured Gen' in name or 'Old Gen' in name:
+                    data['tenured_used'] = pool.get('usageUsed')
+                    data['tenured_commited'] = pool.get('usageCommitted')
+                    data['tenured_max'] = pool.get('usageMax')
+                elif name == 'Code Cache':
+                    data['code_cache_used'] = pool.get('usageUsed')
+                    data['code_cache_commited'] = pool.get('usageCommitted')
+                    data['code_cache_max'] = pool.get('usageMax')
+                elif name == 'Compressed':
+                    data['compressed_used'] = pool.get('usageUsed')
+                    data['compressed_commited'] = pool.get('usageCommitted')
+                    data['compressed_max'] = pool.get('usageMax')
+                elif name == 'Metaspace':
+                    data['metaspace_used'] = pool.get('usageUsed')
+                    data['metaspace_commited'] = pool.get('usageCommitted')
+                    data['metaspace_max'] = pool.get('usageMax')
+
+            if connector:
+                thread_info = connector.find('threadInfo')
+                data['currentThreadsBusy'] = thread_info.get('currentThreadsBusy')
+                data['currentThreadCount'] = thread_info.get('currentThreadCount')
+
+                request_info = connector.find('requestInfo')
+                data['processingTime'] = request_info.get('processingTime')
+                data['requestCount']   = request_info.get('requestCount')
+                data['errorCount']     = request_info.get('errorCount')
+                data['bytesReceived']  = request_info.get('bytesReceived')
+                data['bytesSent']      = request_info.get('bytesSent')
+
+        return data or None

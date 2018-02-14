@@ -2,8 +2,9 @@
 # Description: IPFS netdata python.d module
 # Authors: Pawel Krupa (paulfantom), davidak
 
-from base import UrlService
 import json
+
+from bases.FrameworkServices.UrlService import UrlService
 
 # default module values (can be overridden per job in `config`)
 # update_every = 2
@@ -19,7 +20,7 @@ retries = 60
 # }}
 
 # charts order (can be overridden if you want less charts, or different order)
-ORDER = ['bandwidth', 'peers']
+ORDER = ['bandwidth', 'peers', 'repo_size', 'repo_objects']
 
 CHARTS = {
     'bandwidth': {
@@ -32,76 +33,92 @@ CHARTS = {
         'options': [None, 'IPFS Peers', 'peers', 'Peers', 'ipfs.peers', 'line'],
         'lines': [
             ["peers", None, 'absolute']
-        ]}
+        ]},
+    'repo_size': {
+        'options': [None, 'IPFS Repo Size', 'GB', 'Size', 'ipfs.repo_size', 'area'],
+        'lines': [
+            ["avail", None, "absolute", 1, 1e9],
+            ["size", None, "absolute", 1, 1e9],
+        ]},
+    'repo_objects': {
+        'options': [None, 'IPFS Repo Objects', 'objects', 'Objects', 'ipfs.repo_objects', 'line'],
+        'lines': [
+            ["objects", None, "absolute", 1, 1],
+            ["pinned", None, "absolute", 1, 1],
+            ["recursive_pins", None, "absolute", 1, 1]
+        ]},
 }
+
+SI_zeroes = {'k': 3, 'm': 6, 'g': 9, 't': 12,
+             'p': 15, 'e': 18, 'z': 21, 'y': 24}
 
 
 class Service(UrlService):
     def __init__(self, configuration=None, name=None):
         UrlService.__init__(self, configuration=configuration, name=name)
-        try:
-            self.baseurl = str(self.configuration['url'])
-        except (KeyError, TypeError):
-            self.baseurl = "http://localhost:5001"
+        self.baseurl = self.configuration.get('url', 'http://localhost:5001')
         self.order = ORDER
         self.definitions = CHARTS
+        self.__storage_max = None
 
-    def _get_bandwidth(self):
+    def _get_json(self, sub_url):
         """
-        Format data received from http request
-        :return: int, int
+        :return: json decoding of the specified url
         """
-        self.url = self.baseurl + "/api/v0/stats/bw"
+        self.url = self.baseurl + sub_url
         try:
-            raw = self._get_raw_data()
-        except AttributeError:
-            return None
+            return json.loads(self._get_raw_data())
+        except (TypeError, ValueError):
+            return dict()
 
-        try:
-            parsed = json.loads(raw)
-            bw_in = int(parsed['RateIn'])
-            bw_out = int(parsed['RateOut'])
-        except:
-            return None
+    @staticmethod
+    def _recursive_pins(keys):
+        return len([k for k in keys if keys[k]["Type"] == b"recursive"])
 
-        return bw_in, bw_out
+    @staticmethod
+    def _dehumanize(store_max):
+        # convert from '10Gb' to 10000000000
+        if not isinstance(store_max, int):
+            store_max = store_max.lower()
+            if store_max.endswith('b'):
+                val, units = store_max[:-2], store_max[-2]
+                if units in SI_zeroes:
+                    val += '0'*SI_zeroes[units]
+                store_max = val
+            try:
+                store_max = int(store_max)
+            except (TypeError, ValueError):
+                store_max = None
+        return store_max
 
-    def _get_peers(self):
-        """
-        Format data received from http request
-        :return: int
-        """
-        self.url = self.baseurl + "/api/v0/swarm/peers"
-        try:
-            raw = self._get_raw_data()
-        except AttributeError:
-            return None
-
-        try:
-            parsed = json.loads(raw)
-            peers = len(parsed['Strings'])
-        except:
-            return None
-
-        return peers
+    def _storagemax(self, store_cfg):
+        if self.__storage_max is None:
+            self.__storage_max = self._dehumanize(store_cfg['StorageMax'])
+        return self.__storage_max
 
     def _get_data(self):
         """
         Get data from API
         :return: dict
         """
-        try:
-            peers = self._get_peers()
-            bandwidth_in, bandwidth_out = self._get_bandwidth()
-        except:
-            return None
-        data = {}
-        if peers is not None:
-            data['peers'] = peers
-        if bandwidth_in is not None and bandwidth_out is not None:
-            data['in'] = bandwidth_in
-            data['out'] = bandwidth_out
-
-        if len(data) == 0:
-            return None
-        return data
+        # suburl : List of (result-key, original-key, transform-func)
+        cfg = {
+            '/api/v0/stats/bw':
+                [('in', 'RateIn', int), ('out', 'RateOut', int)],
+            '/api/v0/swarm/peers':
+                [('peers', 'Strings', len)],
+            '/api/v0/stats/repo':
+                [('size', 'RepoSize', int), ('objects', 'NumObjects', int)],
+            '/api/v0/pin/ls':
+                [('pinned', 'Keys', len), ('recursive_pins', 'Keys', self._recursive_pins)],
+            '/api/v0/config/show': [('avail', 'Datastore', self._storagemax)]
+        }
+        r = dict()
+        for suburl in cfg:
+            in_json = self._get_json(suburl)
+            for new_key, orig_key, xmute in cfg[suburl]:
+                try:
+                    r[new_key] = xmute(in_json[orig_key])
+                except Exception:
+                    continue
+        return r or None

@@ -43,7 +43,7 @@ static void mypopen_del(FILE *fp) {
 #define PIPE_READ 0
 #define PIPE_WRITE 1
 
-FILE *mypopen(const char *command, pid_t *pidptr)
+FILE *mypopen(const char *command, volatile pid_t *pidptr)
 {
     int pipefd[2];
 
@@ -105,41 +105,47 @@ FILE *mypopen(const char *command, pid_t *pidptr)
 #endif
 
     // reset all signals
-    {
-        sigset_t sigset;
-        sigfillset(&sigset);
-
-        if(pthread_sigmask(SIG_UNBLOCK, &sigset, NULL) == -1)
-            error("pre-execution of command '%s' on pid %d: could not unblock signals for threads.", command, getpid());
-        
-        // We only need to reset ignored signals.
-        // Signals with signal handlers are reset by default.
-        struct sigaction sa;
-        sigemptyset(&sa.sa_mask);
-        sa.sa_handler = SIG_DFL;
-        sa.sa_flags = 0;
-
-        if(sigaction(SIGINT, &sa, NULL) == -1)
-            error("pre-execution of command '%s' on pid %d: failed to set default signal handler for SIGINT.", command, getpid());
-
-        if(sigaction(SIGTERM, &sa, NULL) == -1)
-            error("pre-execution of command '%s' on pid %d: failed to set default signal handler for SIGTERM.", command, getpid());
-
-        if(sigaction(SIGPIPE, &sa, NULL) == -1)
-            error("pre-execution of command '%s' on pid %d: failed to set default signal handler for SIGPIPE.", command, getpid());
-
-        if(sigaction(SIGHUP, &sa, NULL) == -1)
-            error("pre-execution of command '%s' on pid %d: failed to set default signal handler for SIGHUP.", command, getpid());
-
-        if(sigaction(SIGUSR1, &sa, NULL) == -1)
-            error("pre-execution of command '%s' on pid %d: failed to set default signal handler for SIGUSR1.", command, getpid());
-
-        if(sigaction(SIGUSR2, &sa, NULL) == -1)
-            error("pre-execution of command '%s' on pid %d: failed to set default signal handler for SIGUSR2.", command, getpid());
-    }
+    signals_unblock();
+    signals_reset();
 
     debug(D_CHILDS, "executing command: '%s' on pid %d.", command, getpid());
     execl("/bin/sh", "sh", "-c", command, NULL);
+    exit(1);
+}
+
+FILE *mypopene(const char *command, volatile pid_t *pidptr, char **env) {
+    int pipefd[2];
+
+    if(pipe(pipefd) == -1)
+        return NULL;
+
+    int pid = fork();
+    if(pid == -1) {
+        close(pipefd[PIPE_READ]);
+        close(pipefd[PIPE_WRITE]);
+        return NULL;
+    }
+    if(pid != 0) {
+        // the parent
+        *pidptr = pid;
+        close(pipefd[PIPE_WRITE]);
+        FILE *fp = fdopen(pipefd[PIPE_READ], "r");
+        return(fp);
+    }
+    // the child
+
+    // close all files
+    int i;
+    for(i = (int) (sysconf(_SC_OPEN_MAX) - 1); i > 0; i--)
+        if(i != STDIN_FILENO && i != STDERR_FILENO && i != pipefd[PIPE_WRITE]) close(i);
+
+    // move the pipe to stdout
+    if(pipefd[PIPE_WRITE] != STDOUT_FILENO) {
+        dup2(pipefd[PIPE_WRITE], STDOUT_FILENO);
+        close(pipefd[PIPE_WRITE]);
+    }
+
+    execle("/bin/sh", "sh", "-c", command, NULL, env);
     exit(1);
 }
 
@@ -156,6 +162,8 @@ int mypclose(FILE *fp, pid_t pid) {
     // close the pipe file pointer
     fclose(fp);
 
+    errno = 0;
+
     siginfo_t info;
     if(waitid(P_PID, (id_t) pid, &info, WEXITED) != -1) {
         switch(info.si_code) {
@@ -163,37 +171,30 @@ int mypclose(FILE *fp, pid_t pid) {
                 if(info.si_status)
                     error("child pid %d exited with code %d.", info.si_pid, info.si_status);
                 return(info.si_status);
-                break;
 
             case CLD_KILLED:
                 error("child pid %d killed by signal %d.", info.si_pid, info.si_status);
                 return(-1);
-                break;
 
             case CLD_DUMPED:
                 error("child pid %d core dumped by signal %d.", info.si_pid, info.si_status);
                 return(-2);
-                break;
 
             case CLD_STOPPED:
                 error("child pid %d stopped by signal %d.", info.si_pid, info.si_status);
                 return(0);
-                break;
 
             case CLD_TRAPPED:
                 error("child pid %d trapped by signal %d.", info.si_pid, info.si_status);
                 return(-4);
-                break;
 
             case CLD_CONTINUED:
                 error("child pid %d continued by signal %d.", info.si_pid, info.si_status);
                 return(0);
-                break;
 
             default:
                 error("child pid %d gave us a SIGCHLD with code %d and status %d.", info.si_pid, info.si_code, info.si_status);
                 return(-5);
-                break;
         }
     }
     else

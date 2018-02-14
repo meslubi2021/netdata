@@ -51,7 +51,7 @@ debug() {
 
 # -----------------------------------------------------------------------------
 
-NETDATA_CONFIG_DIR="${NETDATA_CONFIG_DIR-/etc/netdata}"
+[ -z "${NETDATA_CONFIG_DIR}" ] && NETDATA_CONFIG_DIR="$(dirname "${0}")/../../../../etc/netdata"
 CONFIG="${NETDATA_CONFIG_DIR}/cgroups-names.conf"
 CGROUP="${1}"
 NAME=
@@ -74,48 +74,110 @@ if [ -f "${CONFIG}" ]
 #   info "configuration file '${CONFIG}' is not available."
 fi
 
-function get_name_classic {
-    local DOCKERID="$1"
-    info "Running command: docker ps --filter=id=\"${DOCKERID}\" --format=\"{{.Names}}\""
-    NAME="$( docker ps --filter=id="${DOCKERID}" --format="{{.Names}}" )"
+function docker_get_name_classic {
+    local id="${1}"
+    info "Running command: docker ps --filter=id=\"${id}\" --format=\"{{.Names}}\""
+    NAME="$( docker ps --filter=id="${id}" --format="{{.Names}}" )"
     return 0
 }
 
-function get_name_api {
-    local DOCKERID="$1"
+function docker_get_name_api {
+    local id="${1}"
     if [ ! -S "/var/run/docker.sock" ]
         then
         warning "Can't find /var/run/docker.sock"
         return 1
     fi
-    info "Running API command: /containers/${DOCKERID}/json"
-    JSON=$(echo -e "GET /containers/${DOCKERID}/json HTTP/1.0\r\n" | nc -U /var/run/docker.sock | egrep '^{.*')
+    info "Running API command: /containers/${id}/json"
+    JSON=$(echo -e "GET /containers/${id}/json HTTP/1.0\r\n" | nc -U /var/run/docker.sock | grep '^{.*')
     NAME=$(echo $JSON | jq -r .Name,.Config.Hostname | grep -v null | head -n1 | sed 's|^/||')
     return 0
+}
+
+function docker_get_name {
+    local id="${1}"
+    if hash docker 2>/dev/null
+        then
+        docker_get_name_classic "${id}"
+    else
+        docker_get_name_api "${id}" || docker_get_name_classic "${id}"
+    fi
+    if [ -z "${NAME}" ]
+        then
+        warning "cannot find the name of docker container '${id}'"
+        NAME="${id:0:12}"
+    else
+        info "docker container '${id}' is named '${NAME}'"
+    fi
 }
 
 if [ -z "${NAME}" ]
     then
     if [[ "${CGROUP}" =~ ^.*docker[-_/\.][a-fA-F0-9]+[-_\.]?.*$ ]]
         then
+        # docker containers
+
         DOCKERID="$( echo "${CGROUP}" | sed "s|^.*docker[-_/]\([a-fA-F0-9]\+\)[-_\.]\?.*$|\1|" )"
         # echo "DOCKERID=${DOCKERID}"
 
         if [ ! -z "${DOCKERID}" -a \( ${#DOCKERID} -eq 64 -o ${#DOCKERID} -eq 12 \) ]
             then
-            if hash docker 2>/dev/null
-                then
-                get_name_classic $DOCKERID
-            else
-                get_name_api $DOCKERID || get_name_classic $DOCKERID
-            fi
-            if [ -z "${NAME}" ]
-                then
-                warning "cannot find the name of docker container '${DOCKERID}'"
-                NAME="${DOCKERID:0:12}"
-            else
-                info "docker container '${DOCKERID}' is named '${NAME}'"
-            fi
+            docker_get_name "${DOCKERID}"
+        else
+            error "a docker id cannot be extracted from docker cgroup '${CGROUP}'."
+        fi
+    elif [[ "${CGROUP}" =~ ^.*kubepods[_/].*[_/]pod[a-fA-F0-9-]+[_/][a-fA-F0-9]+$ ]]
+        then
+        # kubernetes
+
+        DOCKERID="$( echo "${CGROUP}" | sed "s|^.*kubepods[_/].*[_/]pod[a-fA-F0-9-]\+[_/]\([a-fA-F0-9]\+\)$|\1|" )"
+        # echo "DOCKERID=${DOCKERID}"
+
+        if [ ! -z "${DOCKERID}" -a \( ${#DOCKERID} -eq 64 -o ${#DOCKERID} -eq 12 \) ]
+            then
+            docker_get_name "${DOCKERID}"
+        else
+            error "a docker id cannot be extracted from kubernetes cgroup '${CGROUP}'."
+        fi
+    elif [[ "${CGROUP}" =~ machine.slice[_/].*\.service ]]
+        then
+        # systemd-nspawn
+
+        NAME="$(echo ${CGROUP} | sed 's/.*machine.slice[_\/]\(.*\)\.service/\1/g')"
+
+    elif [[ "${CGROUP}" =~ machine.slice_machine.*-qemu ]]
+        then
+        # libvirtd / qemu virtual machines
+
+        # NAME="$(echo ${CGROUP} | sed 's/machine.slice_machine.*-qemu//; s/\/x2d//; s/\/x2d/\-/g; s/\.scope//g')"
+        NAME="qemu_$(echo ${CGROUP} | sed 's/machine.slice_machine.*-qemu//; s/\/x2d[[:digit:]]*//; s/\/x2d//g; s/\.scope//g')"
+
+    elif [[ "${CGROUP}" =~ machine_.*\.libvirt-qemu ]]
+        then
+        # libvirtd / qemu virtual machines
+        NAME="qemu_$(echo ${CGROUP} | sed 's/^machine_//; s/\.libvirt-qemu$//; s/-/_/;')"
+
+    elif [[ "${CGROUP}" =~ qemu.slice_([0-9]+).scope && -d /etc/pve ]]
+        then
+        # Proxmox VMs
+
+        FILENAME="/etc/pve/qemu-server/${BASH_REMATCH[1]}.conf"
+        if [[ -f $FILENAME && -r $FILENAME ]]
+            then
+            NAME="qemu_$(grep -e '^name: ' "/etc/pve/qemu-server/${BASH_REMATCH[1]}.conf" | head -1 | sed -rn 's|\s*name\s*:\s*(.*)?$|\1|p')"
+        else
+            error "proxmox config file missing ${FILENAME} or netdata does not have read access.  Please ensure netdata is a member of www-data group."
+        fi
+    elif [[ "${CGROUP}" =~ lxc_([0-9]+) && -d /etc/pve ]]
+        then
+        # Proxmox Containers (LXC)
+
+        FILENAME="/etc/pve/lxc/${BASH_REMATCH[1]}.conf"
+        if [[ -f ${FILENAME} && -r ${FILENAME} ]]
+            then
+            NAME=$(grep -e '^hostname: ' /etc/pve/lxc/${BASH_REMATCH[1]}.conf | head -1 | sed -rn 's|\s*hostname\s*:\s*(.*)?$|\1|p')
+        else
+            error "proxmox config file missing ${FILENAME} or netdata does not have read access.  Please ensure netdata is a member of www-data group."
         fi
     fi
 

@@ -2,7 +2,7 @@
 # Description: apache netdata python.d module
 # Author: Pawel Krupa (paulfantom)
 
-from base import UrlService
+from bases.FrameworkServices.UrlService import UrlService
 
 # default module values (can be overridden per job in `config`)
 # update_every = 2
@@ -22,7 +22,8 @@ ORDER = ['requests', 'connections', 'conns_async', 'net', 'workers', 'reqpersec'
 
 CHARTS = {
     'bytesperreq': {
-        'options': [None, 'apache Lifetime Avg. Response Size', 'bytes/request', 'statistics', 'apache.bytesperreq', 'area'],
+        'options': [None, 'apache Lifetime Avg. Response Size', 'bytes/request',
+                    'statistics', 'apache.bytesperreq', 'area'],
         'lines': [
             ["size_req"]
         ]},
@@ -30,17 +31,19 @@ CHARTS = {
         'options': [None, 'apache Workers', 'workers', 'workers', 'apache.workers', 'stacked'],
         'lines': [
             ["idle"],
-            ["busy"]
+            ["busy"],
         ]},
     'reqpersec': {
-        'options': [None, 'apache Lifetime Avg. Requests/s', 'requests/s', 'statistics', 'apache.reqpersec', 'area'],
+        'options': [None, 'apache Lifetime Avg. Requests/s', 'requests/s', 'statistics',
+                    'apache.reqpersec', 'area'],
         'lines': [
             ["requests_sec"]
         ]},
     'bytespersec': {
-        'options': [None, 'apache Lifetime Avg. Bandwidth/s', 'kilobytes/s', 'statistics', 'apache.bytesperreq', 'area'],
+        'options': [None, 'apache Lifetime Avg. Bandwidth/s', 'kilobits/s', 'statistics',
+                    'apache.bytesperreq', 'area'],
         'lines': [
-            ["size_sec", None, 'absolute', 1, 1000]
+            ["size_sec", None, 'absolute', 8, 1000]
         ]},
     'requests': {
         'options': [None, 'apache Requests', 'requests/s', 'requests', 'apache.requests', 'line'],
@@ -48,9 +51,9 @@ CHARTS = {
             ["requests", None, 'incremental']
         ]},
     'net': {
-        'options': [None, 'apache Bandwidth', 'kilobytes/s', 'bandwidth', 'apache.net', 'area'],
+        'options': [None, 'apache Bandwidth', 'kilobits/s', 'bandwidth', 'apache.net', 'area'],
         'lines': [
-            ["sent", None, 'incremental']
+            ["sent", None, 'incremental', 8, 1]
         ]},
     'connections': {
         'options': [None, 'apache Connections', 'connections', 'connections', 'apache.connections', 'line'],
@@ -66,43 +69,61 @@ CHARTS = {
         ]}
 }
 
+ASSIGNMENT = {"BytesPerReq": 'size_req',
+              "IdleWorkers": 'idle',
+              "IdleServers": 'idle_servers',
+              "BusyWorkers": 'busy',
+              "BusyServers": 'busy_servers',
+              "ReqPerSec": 'requests_sec',
+              "BytesPerSec": 'size_sec',
+              "Total Accesses": 'requests',
+              "Total kBytes": 'sent',
+              "ConnsTotal": 'connections',
+              "ConnsAsyncKeepAlive": 'keepalive',
+              "ConnsAsyncClosing": 'closing',
+              "ConnsAsyncWriting": 'writing'}
+
 
 class Service(UrlService):
     def __init__(self, configuration=None, name=None):
         UrlService.__init__(self, configuration=configuration, name=name)
-        if len(self.url) == 0:
-            self.url = "http://localhost/server-status?auto"
         self.order = ORDER
         self.definitions = CHARTS
-        self.assignment = {"BytesPerReq": 'size_req',
-                           "IdleWorkers": 'idle',
-                           "BusyWorkers": 'busy',
-                           "ReqPerSec": 'requests_sec',
-                           "BytesPerSec": 'size_sec',
-                           "Total Accesses": 'requests',
-                           "Total kBytes": 'sent',
-                           "ConnsTotal": 'connections',
-                           "ConnsAsyncKeepAlive": 'keepalive',
-                           "ConnsAsyncClosing": 'closing',
-                           "ConnsAsyncWriting": 'writing'}
+        self.url = self.configuration.get('url', 'http://localhost/server-status?auto')
+
+    def check(self):
+        self._manager = self._build_manager()
+        data = self._get_data()
+        if not data:
+            return None
+
+        if 'idle_servers' in data:
+            self.module_name = 'lighttpd'
+            for chart in self.definitions:
+                if chart == 'workers':
+                    lines = self.definitions[chart]['lines']
+                    lines[0] = ["idle_servers", 'idle']
+                    lines[1] = ["busy_servers", 'busy']
+                opts = self.definitions[chart]['options']
+                opts[1] = opts[1].replace('apache', 'lighttpd')
+                opts[4] = opts[4].replace('apache', 'lighttpd')
+        return True
 
     def _get_data(self):
         """
         Format data received from http request
         :return: dict
         """
-        try:
-            raw = self._get_raw_data().split("\n")
-        except AttributeError:
+        raw_data = self._get_raw_data()
+        if not raw_data:
             return None
-        data = {}
-        for row in raw:
+        data = dict()
+
+        for row in raw_data.split('\n'):
             tmp = row.split(":")
-            if str(tmp[0]) in self.assignment:
+            if tmp[0] in ASSIGNMENT:
                 try:
-                    data[self.assignment[tmp[0]]] = int(float(tmp[1]))
+                    data[ASSIGNMENT[tmp[0]]] = int(float(tmp[1]))
                 except (IndexError, ValueError):
-                    pass
-        if len(data) == 0:
-            return None
-        return data
+                    continue
+        return data or None

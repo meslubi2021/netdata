@@ -2,7 +2,7 @@
 # Description: dovecot netdata python.d module
 # Author: Pawel Krupa (paulfantom)
 
-from base import SocketService
+from bases.FrameworkServices.SocketService import SocketService
 
 # default module values (can be overridden per job in `config`)
 # update_every = 2
@@ -42,8 +42,8 @@ CHARTS = {
     'context_switches': {
         'options': [None, "Dovecot Context Switches", '', 'context switches', 'dovecot.context_switches', 'line'],
         'lines': [
-            ['vol_cs', 'volountary', 'absolute'],
-            ['invol_cs', 'involountary', 'absolute']
+            ['vol_cs', 'voluntary', 'absolute'],
+            ['invol_cs', 'involuntary', 'absolute']
         ]},
     'io': {
         'options': [None, "Dovecot Disk I/O", 'kilobytes/s', 'disk', 'dovecot.io', 'area'],
@@ -117,19 +117,10 @@ class Service(SocketService):
         data = raw.split('\n')[:2]
         desc = data[0].split('\t')
         vals = data[1].split('\t')
-        # ret = dict(zip(desc, vals))
-        ret = {}
-        for i in range(len(desc)):
+        ret = dict()
+        for i, _ in enumerate(desc):
             try:
-                #d = str(desc[i])
-                #if d in ('user_cpu', 'sys_cpu', 'clock_time'):
-                #    val = float(vals[i])
-                #else:
-                #    val = int(vals[i])
-                #ret[d] = val
                 ret[str(desc[i])] = int(vals[i])
             except ValueError:
-                pass
-        if len(ret) == 0:
-            return None
-        return ret
+                continue
+        return ret or None

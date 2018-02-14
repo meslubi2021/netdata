@@ -3,7 +3,7 @@
     "info": {
         "title": "NetData API",
         "description": "Real time data collection and graphs...",
-        "version": "1.4.1_master"
+        "version": "1.5.1_rolling"
     },
     "host": "registry.my-netdata.io",
     "schemes": [
@@ -133,6 +133,16 @@
                         "allowEmptyValue": false
                     },
                     {
+                        "name": "gtime",
+                        "in": "query",
+                        "description": "The grouping number of seconds. This is used in conjunction with group=average to change the units of metrics (ie when the data is per-second, setting gtime=60 will turn them to per-minute).",
+                        "required": false,
+                        "type": "number",
+                        "format": "integer",
+                        "allowEmptyValue": false,
+                        "default": 0
+                    },
+                    {
                         "name": "format",
                         "in": "query",
                         "description": "The format of the data to be returned.",
@@ -177,7 +187,9 @@
                                 "objectrows",
                                 "google_json",
                                 "percentage",
-                                "unaligned"
+                                "unaligned",
+                                "match-ids",
+                                "match-names"
                             ],
                             "collectionFormat": "pipes"
                         },
@@ -258,7 +270,7 @@
                     {
                         "name": "dimension",
                         "in": "query",
-                        "description": "zero, one or more dimension ids, as returned by the /chart call.",
+                        "description": "zero, one or more dimension ids or names, as returned by the /chart call, separated with comma or pipe. Netdata simple patterns are supported.",
                         "required": false,
                         "type": "array",
                         "items": {
@@ -314,6 +326,7 @@
                             "enum": [
                                 "abs",
                                 "absolute",
+                                "display-absolute",
                                 "absolute-sum",
                                 "null2zero",
                                 "percentage",
@@ -396,6 +409,34 @@
                     }
                 }
             }
+        },
+        "/allmetrics": {
+            "get": {
+                "summary": "Get a value of all the metrics maintained by netdata",
+                "description": "The charts endpoint returns the latest value of all charts and dimensions stored in the netdata server.",
+                "parameters": [
+                    {
+                        "name": "format",
+                        "in": "query",
+                        "description": "The format of the response to be returned",
+                        "required": true,
+                        "type": "string",
+                        "enum": [
+                            "shell",
+                            "prometheus"
+                        ],
+                        "default": "shell"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "All the metrics returned in the format requested"
+                    },
+                    "400": {
+                        "description": "The format requested is not supported"
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -405,6 +446,23 @@
                 "hostname": {
                     "type": "string",
                     "description": "The hostname of the netdata server."
+                },
+                "version": {
+                    "type": "string",
+                    "description": "netdata version of the server."
+                },
+                "os": {
+                    "type": "string",
+                    "description": "The netdata server host operating system.",
+                    "enum": [
+                        "macos",
+                        "linux",
+                        "freebsd"
+                    ]
+                },
+                "history": {
+                    "type": "number",
+                    "description": "The duration, in seconds, of the round robin database maintained by netdata."
                 },
                 "update_every": {
                     "type": "number",
@@ -418,6 +476,22 @@
                             "$ref": "#/definitions/chart"
                         }
                     }
+                },
+                "charts_count": {
+                    "type": "number",
+                    "description": "The number of charts."
+                },
+                "dimensions_count": {
+                    "type": "number",
+                    "description": "The total number of dimensions."
+                },
+                "alarms_count": {
+                    "type": "number",
+                    "description": "The number of alarms."
+                },
+                "rrd_memory_bytes": {
+                    "type": "number",
+                    "description": "The size of the round robin database in bytes."
                 }
             }
         },
@@ -493,6 +567,14 @@
                             "$ref": "#/definitions/dimension"
                         }
                     }
+                },
+                "green": {
+                    "type": "number",
+                    "description": "Chart health green threshold"
+                },
+                "red": {
+                    "type": "number",
+                    "description": "Chart health red trheshold"
                 }
             }
         },

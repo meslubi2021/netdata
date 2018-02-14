@@ -2,10 +2,9 @@
 # Description: redis netdata python.d module
 # Author: Pawel Krupa (paulfantom)
 
-from base import SocketService
+from bases.FrameworkServices.SocketService import SocketService
 
 # default module values (can be overridden per job in `config`)
-#update_every = 2
 priority = 60000
 retries = 60
 
@@ -19,7 +18,8 @@ retries = 60
 #             'unix_socket': None
 #          }}
 
-ORDER = ['operations', 'hit_rate', 'memory', 'keys', 'net', 'connections', 'clients', 'slaves', 'persistence']
+ORDER = ['operations', 'hit_rate', 'memory', 'keys', 'net', 'connections', 'clients', 'slaves', 'persistence',
+         'bgsave_now', 'bgsave_health']
 
 CHARTS = {
     'operations': {
@@ -68,9 +68,22 @@ CHARTS = {
             ['connected_slaves', 'connected', 'absolute']
         ]},
     'persistence': {
-        'options': [None, 'Redis Persistence Changes Since Last Save', 'changes', 'persistence', 'redis.rdb_changes', 'line'],
+        'options': [None, 'Redis Persistence Changes Since Last Save', 'changes', 'persistence',
+                    'redis.rdb_changes', 'line'],
         'lines': [
             ['rdb_changes_since_last_save', 'changes', 'absolute']
+        ]},
+    'bgsave_now': {
+        'options': [None, 'Duration of the RDB Save Operation', 'seconds', 'persistence',
+                    'redis.bgsave_now', 'absolute'],
+        'lines': [
+            ['rdb_bgsave_in_progress', 'rdb save', 'absolute']
+        ]},
+    'bgsave_health': {
+        'options': [None, 'Status of the Last RDB Save Operation', 'status', 'persistence',
+                    'redis.bgsave_health', 'line'],
+        'lines': [
+            ['rdb_last_bgsave_status', 'rdb save', 'absolute']
         ]}
 }
 
@@ -78,35 +91,31 @@ CHARTS = {
 class Service(SocketService):
     def __init__(self, configuration=None, name=None):
         SocketService.__init__(self, configuration=configuration, name=name)
-        self.request = "INFO\r\n"
         self.order = ORDER
         self.definitions = CHARTS
         self._keep_alive = True
         self.chart_name = ""
-        self.passwd = None
-        self.port = 6379
-        if 'port' in configuration:
-            self.port = configuration['port']
-        if 'pass' in configuration:
-            self.passwd = configuration['pass']
-        if 'host' in configuration:
-            self.host = configuration['host']
-        if 'socket' in configuration:
-            self.unix_socket = configuration['socket']
+        self.host = self.configuration.get('host', 'localhost')
+        self.port = self.configuration.get('port', 6379)
+        self.unix_socket = self.configuration.get('socket')
+        password = self.configuration.get('pass', str())
+        self.bgsave_time = 0
+        self.requests = dict(request='INFO\r\n'.encode(),
+                             password=' '.join(['AUTH', password, '\r\n']).encode() if password else None)
+        self.request = self.requests['request']
 
     def _get_data(self):
         """
         Get data from socket
         :return: dict
         """
-        if self.passwd:
-            info_request = self.request
-            self.request = "AUTH " + self.passwd + "\r\n"
+        if self.requests['password']:
+            self.request = self.requests['password']
             raw = self._get_raw_data().strip()
             if raw != "+OK":
                 self.error("invalid password")
                 return None
-            self.request = info_request
+            self.request = self.requests['request']
         response = self._get_raw_data()
         if response is None:
             # error has already been logged
@@ -118,7 +127,7 @@ class Service(SocketService):
             self.error("response is invalid/empty")
             return None
 
-        data = {}
+        data = dict()
         for line in parsed:
             if len(line) < 5 or line[0] == '$' or line[0] == '#':
                 continue
@@ -134,16 +143,24 @@ class Service(SocketService):
                 data[t[0]] = t[1]
             except (IndexError, ValueError):
                 self.debug("invalid line received: " + str(line))
-                pass
 
-        if len(data) == 0:
+        if not data:
             self.error("received data doesn't have any records")
             return None
 
         try:
-            data['hit_rate'] = (int(data['keyspace_hits']) * 100) / (int(data['keyspace_hits']) + int(data['keyspace_misses']))
-        except:
+            data['hit_rate'] = (int(data['keyspace_hits']) * 100) / (int(data['keyspace_hits'])
+                                                                     + int(data['keyspace_misses']))
+        except (KeyError, ZeroDivisionError, TypeError):
             data['hit_rate'] = 0
+
+        if data['rdb_bgsave_in_progress'] != '0\r':
+            self.bgsave_time += self.update_every
+        else:
+            self.bgsave_time = 0
+
+        data['rdb_last_bgsave_status'] = 0 if data['rdb_last_bgsave_status'] == 'ok\r' else 1
+        data['rdb_bgsave_in_progress'] = self.bgsave_time
 
         return data
 
@@ -155,7 +172,7 @@ class Service(SocketService):
         :return: boolean
         """
         length = len(data)
-        supposed = data.split('\n')[0][1:]
+        supposed = data.split('\n')[0][1:-1]
         offset = len(supposed) + 4  # 1 dollar sing, 1 new line character + 1 ending sequence '\r\n'
         if not supposed.isdigit():
             return True
@@ -173,10 +190,6 @@ class Service(SocketService):
         Parse configuration, check if redis is available, and dynamically create chart lines data
         :return: boolean
         """
-        self._parse_config()
-        if self.name == "":
-            self.name = "local"
-            self.chart_name += "_" + self.name
         data = self._get_data()
         if data is None:
             return False
@@ -184,5 +197,4 @@ class Service(SocketService):
         for name in data:
             if name.startswith('db'):
                 self.definitions['keys']['lines'].append([name, None, 'absolute'])
-
         return True

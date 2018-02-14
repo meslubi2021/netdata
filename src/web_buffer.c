@@ -21,7 +21,7 @@ static inline void _buffer_overflow_check(BUFFER *b, const char *file, const cha
         b->len = b->size;
     }
 
-    if(b->buffer[b->size] != '\0' || strcmp(&b->buffer[b->size + 1], BUFFER_OVERFLOW_EOF)) {
+    if(b->buffer[b->size] != '\0' || strcmp(&b->buffer[b->size + 1], BUFFER_OVERFLOW_EOF) != 0) {
         error("BUFFER: detected overflow at line %lu, at function %s() of file '%s'.", line, function, file);
         buffer_overflow_init(b);
     }
@@ -84,6 +84,19 @@ inline char *print_number_llu_r(char *str, unsigned long long uvalue) {
     return wstr;
 }
 
+inline char *print_number_llu_r_smart(char *str, unsigned long long uvalue) {
+#ifdef ENVIRONMENT32
+    if(uvalue > (unsigned long long)0xffffffff)
+        str = print_number_llu_r(str, uvalue);
+    else
+        str = print_number_lu_r(str, uvalue);
+#else
+    do *str++ = (char)('0' + (uvalue % 10)); while(uvalue /= 10);
+#endif
+
+    return str;
+}
+
 void buffer_print_llu(BUFFER *wb, unsigned long long uvalue)
 {
     buffer_need_bytes(wb, 50);
@@ -113,6 +126,8 @@ void buffer_print_llu(BUFFER *wb, unsigned long long uvalue)
 
 void buffer_strcat(BUFFER *wb, const char *txt)
 {
+    // buffer_sprintf(wb, "%s", txt);
+
     if(unlikely(!txt || !*txt)) return;
 
     buffer_need_bytes(wb, 1);
@@ -143,6 +158,26 @@ void buffer_strcat(BUFFER *wb, const char *txt)
     }
 }
 
+void buffer_strcat_htmlescape(BUFFER *wb, const char *txt)
+{
+    while(*txt) {
+        switch(*txt) {
+            case '&': buffer_strcat(wb, "&amp;"); break;
+            case '<': buffer_strcat(wb, "&lt;"); break;
+            case '>': buffer_strcat(wb, "&gt;"); break;
+            case '"': buffer_strcat(wb, "&quot;"); break;
+            case '/': buffer_strcat(wb, "&#x2F;"); break;
+            case '\'': buffer_strcat(wb, "&#x27;"); break;
+            default: {
+                buffer_need_bytes(wb, 1);
+                wb->buffer[wb->len++] = *txt;
+            }
+        }
+        txt++;
+    }
+
+    buffer_overflow_check(wb);
+}
 
 void buffer_snprintf(BUFFER *wb, size_t len, const char *fmt, ...)
 {
@@ -179,29 +214,25 @@ void buffer_sprintf(BUFFER *wb, const char *fmt, ...)
 {
     if(unlikely(!fmt || !*fmt)) return;
 
-    buffer_need_bytes(wb, 2);
-
-    size_t len = wb->size - wb->len - 1;
-    size_t wrote;
-
     va_list args;
-    va_start(args, fmt);
-    wrote = (size_t) vsnprintfz(&wb->buffer[wb->len], len, fmt, args);
-    va_end(args);
+    size_t wrote = 0, need = 2, multiplier = 0, len;
 
-    if(unlikely(wrote >= len)) {
-        // truncated
-        buffer_overflow_check(wb);
+    do {
+        need += wrote + multiplier * WEB_DATA_LENGTH_INCREASE_STEP;
+        multiplier++;
 
-        debug(D_WEB_BUFFER, "web_buffer_sprintf(): increasing web_buffer at position %zu, size = %zu\n", wb->len, wb->size);
-        buffer_need_bytes(wb, len + WEB_DATA_LENGTH_INCREASE_STEP);
+        debug(D_WEB_BUFFER, "web_buffer_sprintf(): increasing web_buffer at position %zu, size = %zu, by %zu bytes (wrote = %zu)\n", wb->len, wb->size, need, wrote);
+        buffer_need_bytes(wb, need);
+
+        len = wb->size - wb->len - 1;
 
         va_start(args, fmt);
-        buffer_vsprintf(wb, fmt, args);
+        wrote = (size_t) vsnprintfz(&wb->buffer[wb->len], len, fmt, args);
         va_end(args);
-    }
-    else
-        wb->len += wrote;
+
+    } while(wrote >= len);
+
+    wb->len += wrote;
 
     // the buffer is \0 terminated by vsnprintf
 }
@@ -337,8 +368,9 @@ BUFFER *buffer_create(size_t size)
     return(b);
 }
 
-void buffer_free(BUFFER *b)
-{
+void buffer_free(BUFFER *b) {
+    if(unlikely(!b)) return;
+
     buffer_overflow_check(b);
 
     debug(D_WEB_BUFFER, "Freeing web buffer of size %zu.", b->size);

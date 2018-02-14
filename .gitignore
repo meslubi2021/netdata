@@ -25,10 +25,13 @@ stamp-h1
 
 netdata
 apps.plugin
+freeipmi.plugin
 netdata.spec
 
 *.tar.*
 
+cmake-build-debug/
+makeself/tmp/
 sitespeed-result/
 cov-int/
 netdata-coverity-analysis.tgz
@@ -37,6 +40,7 @@ netdata-coverity-analysis.tgz
 
 .cproject
 .idea/
+.vscode/
 .project
 README
 TODO.md
@@ -64,6 +68,10 @@ web/gadget.xml
 web/index_new.html
 web/version.txt
 
+# related to karma/javascript/node
+node_modules/
+coverage/
+
 system/netdata-lsb
 system/netdata-openrc
 system/netdata-init-d
@@ -84,15 +92,27 @@ cmake_install.cmake
 
 .jetbrains*
 
+.DS_Store
+
 contrib/debian/changelog
 profile/benchmark-dictionary
 profile/benchmark-registry
+profile/test-eval
+profile/benchmark-line-parsing
+profile/statsd-stress
 
 *.pyc
+*.run
 
 diagrams/*.png
 diagrams/*.svg
 diagrams/*.atxt
 diagrams/plantuml.jar
 
-netdata.cppcheck
+src/cgroup-network
+vgcore.*
+
+src/cppcheck-build/
+makeself/debug/
+
+
