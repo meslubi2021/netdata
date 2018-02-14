@@ -87,6 +87,7 @@ Group:		Applications/System
 Source0:	https://github.com/firehol/%{name}/releases/download/v%{version}/%{name}-%{version}.tar.xz
 URL:		http://my-netdata.io
 BuildRequires:	autoconf
+BuildRequires:  automake
 BuildRequires:	pkgconfig
 BuildRequires:	xz
 BuildRequires:	zlib-devel
