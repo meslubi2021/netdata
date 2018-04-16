@@ -80,7 +80,7 @@ Recommends:	python2-psycopg2 \
 
 Summary:	Real-time performance monitoring, done right
 Name:		netdata
-Version:	1.9.0
+Version:	1.10.0
 Release:	1%{?dist}
 License:	GPLv3+
 Group:		Applications/System
@@ -235,6 +235,9 @@ rm -rf "${RPM_BUILD_ROOT}"
 %{_datadir}/%{name}/web
 
 %changelog
+* Tue Mar 27 2018 Costa Tsaousis <costa@tsaousis.gr> - 1.10.0-1
+  Please check full changelog at github.
+  https://github.com/firehol/netdata/releases
 * Sun Dec 17 2017 Costa Tsaousis <costa@tsaousis.gr> - 1.9.0-1
   Please check full changelog at github.
   https://github.com/firehol/netdata/releases
