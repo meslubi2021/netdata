@@ -142,6 +142,8 @@ void web_client_request_done(struct web_client *w) {
     w->origin[0] = '*';
     w->origin[1] = '\0';
 
+    freez(w->user_agent); w->user_agent = NULL;
+
     w->mode = WEB_CLIENT_MODE_NORMAL;
 
     w->tcp_cork = 0;
@@ -156,6 +158,9 @@ void web_client_request_done(struct web_client *w) {
     w->response.rlen = 0;
     w->response.sent = 0;
     w->response.code = 0;
+
+    w->header_parse_tries = 0;
+    w->header_parse_last_size = 0;
 
     web_client_enable_wait_receive(w);
     web_client_disable_wait_send(w);
@@ -722,14 +727,15 @@ const char *web_response_code_to_string(int code) {
     }
 }
 
-static inline char *http_header_parse(struct web_client *w, char *s) {
-    static uint32_t hash_origin = 0, hash_connection = 0, hash_accept_encoding = 0, hash_donottrack = 0;
+static inline char *http_header_parse(struct web_client *w, char *s, int parse_useragent) {
+    static uint32_t hash_origin = 0, hash_connection = 0, hash_accept_encoding = 0, hash_donottrack = 0, hash_useragent = 0;
 
     if(unlikely(!hash_origin)) {
         hash_origin = simple_uhash("Origin");
         hash_connection = simple_uhash("Connection");
         hash_accept_encoding = simple_uhash("Accept-Encoding");
         hash_donottrack = simple_uhash("DNT");
+        hash_useragent = simple_uhash("User-Agent");
     }
 
     char *e = s;
@@ -772,6 +778,9 @@ static inline char *http_header_parse(struct web_client *w, char *s) {
         if(*v == '0') web_client_disable_donottrack(w);
         else if(*v == '1') web_client_enable_donottrack(w);
     }
+    else if(parse_useragent && hash == hash_useragent && !strcasecmp(s, "User-Agent")) {
+        w->user_agent = strdupz(v);
+    }
 #ifdef NETDATA_WITH_ZLIB
     else if(hash == hash_accept_encoding && !strcasecmp(s, "Accept-Encoding")) {
         if(web_enable_gzip) {
@@ -803,7 +812,31 @@ typedef enum {
 } HTTP_VALIDATION;
 
 static inline HTTP_VALIDATION http_request_validate(struct web_client *w) {
-    char *s = w->response.data->buffer, *encoded_url = NULL;
+    char *s = (char *)buffer_tostring(w->response.data), *encoded_url = NULL;
+
+    size_t last_pos = w->header_parse_last_size;
+    if(last_pos > 4) last_pos -= 4; // allow searching for \r\n\r\n
+    else last_pos = 0;
+
+    w->header_parse_tries++;
+    w->header_parse_last_size = buffer_strlen(w->response.data);
+
+    if(w->header_parse_tries > 1) {
+        if(w->header_parse_last_size < last_pos)
+            last_pos = 0;
+
+        if(strstr(&s[last_pos], "\r\n\r\n") == NULL) {
+            if(w->header_parse_tries > 10) {
+                info("Disabling slow client after %zu attempts to read the request (%zu bytes received)", w->header_parse_tries, buffer_strlen(w->response.data));
+                w->header_parse_tries = 0;
+                w->header_parse_last_size = 0;
+                web_client_disable_wait_receive(w);
+                return HTTP_VALIDATION_NOT_SUPPORTED;
+            }
+
+            return HTTP_VALIDATION_INCOMPLETE;
+        }
+    }
 
     // is is a valid request?
     if(!strncmp(s, "GET ", 4)) {
@@ -819,6 +852,8 @@ static inline HTTP_VALIDATION http_request_validate(struct web_client *w) {
         w->mode = WEB_CLIENT_MODE_STREAM;
     }
     else {
+        w->header_parse_tries = 0;
+        w->header_parse_last_size = 0;
         web_client_disable_wait_receive(w);
         return HTTP_VALIDATION_NOT_SUPPORTED;
     }
@@ -866,12 +901,16 @@ static inline HTTP_VALIDATION http_request_validate(struct web_client *w) {
                 // FIXME -- we should avoid it
                 strncpyz(w->last_url, w->decoded_url, NETDATA_WEB_REQUEST_URL_SIZE);
 
+                w->header_parse_tries = 0;
+                w->header_parse_last_size = 0;
                 web_client_disable_wait_receive(w);
                 return HTTP_VALIDATION_OK;
             }
 
             // another header line
-            s = http_header_parse(w, s);
+            s = http_header_parse(w, s,
+                    (w->mode == WEB_CLIENT_MODE_STREAM) // parse user agent
+            );
         }
     }
 

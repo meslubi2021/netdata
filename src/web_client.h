@@ -128,6 +128,9 @@ struct web_client {
     WEB_CLIENT_MODE mode;           // the operational mode of the client
     WEB_CLIENT_ACL acl;             // the access list of the client
 
+    size_t header_parse_tries;
+    size_t header_parse_last_size;
+
     int tcp_cork;                   // 1 = we have a cork on the socket
 
     int ifd;
@@ -144,6 +147,7 @@ struct web_client {
     char cookie1[NETDATA_WEB_REQUEST_COOKIE_SIZE+1];
     char cookie2[NETDATA_WEB_REQUEST_COOKIE_SIZE+1];
     char origin[NETDATA_WEB_REQUEST_ORIGIN_HEADER_SIZE+1];
+    char *user_agent;
 
     struct response response;
 

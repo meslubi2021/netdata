@@ -222,6 +222,8 @@ typedef struct statsd_app {
 
 struct collection_thread_status {
     int status;
+    size_t max_sockets;
+
     netdata_thread_t thread;
     struct rusage rusage;
     RRDSET *st_cpu;
@@ -259,6 +261,7 @@ static struct statsd {
     size_t max_private_charts_hard;
     RRD_MEMORY_MODE private_charts_memory_mode;
     long private_charts_rrd_history_entries;
+    int private_charts_hidden;
 
     STATSD_APP *apps;
     size_t recvmmsg_size;
@@ -274,6 +277,7 @@ static struct statsd {
         .enabled = 1,
         .max_private_charts = 200,
         .max_private_charts_hard = 1000,
+        .private_charts_hidden = 0,
         .recvmmsg_size = 10,
         .decimal_detail = STATSD_DECIMAL_DETAIL,
 
@@ -357,7 +361,7 @@ static int statsd_metric_compare(void* a, void* b) {
     else return strcmp(((STATSD_METRIC *)a)->name, ((STATSD_METRIC *)b)->name);
 }
 
-static inline STATSD_METRIC *stasd_metric_index_find(STATSD_INDEX *index, const char *name, uint32_t hash) {
+static inline STATSD_METRIC *statsd_metric_index_find(STATSD_INDEX *index, const char *name, uint32_t hash) {
     STATSD_METRIC tmp;
     tmp.name = name;
     tmp.hash = (hash)?hash:simple_hash(tmp.name);
@@ -370,7 +374,7 @@ static inline STATSD_METRIC *statsd_find_or_add_metric(STATSD_INDEX *index, cons
 
     uint32_t hash = simple_hash(name);
 
-    STATSD_METRIC *m = stasd_metric_index_find(index, name, hash);
+    STATSD_METRIC *m = statsd_metric_index_find(index, name, hash);
     if(unlikely(!m)) {
         debug(D_STATSD, "Creating new %s metric '%s'", index->name, name);
 
@@ -980,6 +984,7 @@ void *statsd_collector_thread(void *ptr) {
             , statsd.tcp_idle_timeout  // tcp idle timeout, 0 = disabled
             , statsd.update_every * 1000
             , ptr // timer_data
+            , status->max_sockets
     );
 
     netdata_thread_cleanup_pop(1);
@@ -1449,6 +1454,10 @@ static inline RRDSET *statsd_private_rrdset_create(
             , history         // history
     );
     rrdset_flag_set(st, RRDSET_FLAG_STORE_FIRST);
+
+    if(statsd.private_charts_hidden)
+        rrdset_flag_set(st, RRDSET_FLAG_HIDDEN);
+
     // rrdset_flag_set(st, RRDSET_FLAG_DEBUG);
     return st;
 }
@@ -1460,14 +1469,20 @@ static inline void statsd_private_chart_gauge(STATSD_METRIC *m) {
         char type[RRD_ID_LENGTH_MAX + 1], id[RRD_ID_LENGTH_MAX + 1];
         statsd_get_metric_type_and_id(m, type, id, "gauge", RRD_ID_LENGTH_MAX);
 
+        char context[RRD_ID_LENGTH_MAX + 1];
+        snprintfz(context, RRD_ID_LENGTH_MAX, "statsd_gauge.%s", m->name);
+
+        char title[RRD_ID_LENGTH_MAX + 1];
+        snprintfz(title, RRD_ID_LENGTH_MAX, "statsd private chart for gauge %s", m->name);
+
         m->st = statsd_private_rrdset_create(
                 m
                 , type
                 , id
                 , NULL          // name
                 , "gauges"      // family (submenu)
-                , m->name       // context
-                , m->name       // title
+                , context       // context
+                , title         // title
                 , "value"       // units
                 , STATSD_CHART_PRIORITY
                 , statsd.update_every
@@ -1496,14 +1511,20 @@ static inline void statsd_private_chart_counter_or_meter(STATSD_METRIC *m, const
         char type[RRD_ID_LENGTH_MAX + 1], id[RRD_ID_LENGTH_MAX + 1];
         statsd_get_metric_type_and_id(m, type, id, dim, RRD_ID_LENGTH_MAX);
 
+        char context[RRD_ID_LENGTH_MAX + 1];
+        snprintfz(context, RRD_ID_LENGTH_MAX, "statsd_%s.%s", dim, m->name);
+
+        char title[RRD_ID_LENGTH_MAX + 1];
+        snprintfz(title, RRD_ID_LENGTH_MAX, "statsd private chart for %s %s", dim, m->name);
+
         m->st = statsd_private_rrdset_create(
                 m
                 , type
                 , id
                 , NULL          // name
                 , family        // family (submenu)
-                , m->name       // context
-                , m->name       // title
+                , context       // context
+                , title         // title
                 , "events/s"    // units
                 , STATSD_CHART_PRIORITY
                 , statsd.update_every
@@ -1532,14 +1553,20 @@ static inline void statsd_private_chart_set(STATSD_METRIC *m) {
         char type[RRD_ID_LENGTH_MAX + 1], id[RRD_ID_LENGTH_MAX + 1];
         statsd_get_metric_type_and_id(m, type, id, "set", RRD_ID_LENGTH_MAX);
 
+        char context[RRD_ID_LENGTH_MAX + 1];
+        snprintfz(context, RRD_ID_LENGTH_MAX, "statsd_set.%s", m->name);
+
+        char title[RRD_ID_LENGTH_MAX + 1];
+        snprintfz(title, RRD_ID_LENGTH_MAX, "statsd private chart for set %s", m->name);
+
         m->st = statsd_private_rrdset_create(
                 m
                 , type
                 , id
                 , NULL          // name
                 , "sets"        // family (submenu)
-                , m->name       // context
-                , m->name       // title
+                , context       // context
+                , title         // title
                 , "entries"     // units
                 , STATSD_CHART_PRIORITY
                 , statsd.update_every
@@ -1568,14 +1595,20 @@ static inline void statsd_private_chart_timer_or_histogram(STATSD_METRIC *m, con
         char type[RRD_ID_LENGTH_MAX + 1], id[RRD_ID_LENGTH_MAX + 1];
         statsd_get_metric_type_and_id(m, type, id, dim, RRD_ID_LENGTH_MAX);
 
+        char context[RRD_ID_LENGTH_MAX + 1];
+        snprintfz(context, RRD_ID_LENGTH_MAX, "statsd_%s.%s", dim, m->name);
+
+        char title[RRD_ID_LENGTH_MAX + 1];
+        snprintfz(title, RRD_ID_LENGTH_MAX, "statsd private chart for %s %s", dim, m->name);
+
         m->st = statsd_private_rrdset_create(
                 m
                 , type
                 , id
                 , NULL          // name
                 , family        // family (submenu)
-                , m->name       // context
-                , m->name       // title
+                , context       // context
+                , title         // title
                 , units         // units
                 , STATSD_CHART_PRIORITY
                 , statsd.update_every
@@ -2099,6 +2132,7 @@ void *statsd_main(void *ptr) {
     statsd.private_charts_rrd_history_entries = (int)config_get_number(CONFIG_SECTION_STATSD, "private charts history", default_rrd_history_entries);
     statsd.decimal_detail = (size_t)config_get_number(CONFIG_SECTION_STATSD, "decimal detail", (long long int)statsd.decimal_detail);
     statsd.tcp_idle_timeout = (size_t) config_get_number(CONFIG_SECTION_STATSD, "disconnect idle tcp clients after seconds", (long long int)statsd.tcp_idle_timeout);
+    statsd.private_charts_hidden = (int)config_get_boolean(CONFIG_SECTION_STATSD, "private charts hidden", statsd.private_charts_hidden);
 
     statsd.histogram_percentile = (double)config_get_float(CONFIG_SECTION_STATSD, "histograms and timers percentile (percentThreshold)", statsd.histogram_percentile);
     if(isless(statsd.histogram_percentile, 0) || isgreater(statsd.histogram_percentile, 100)) {
@@ -2138,6 +2172,8 @@ void *statsd_main(void *ptr) {
     if(config_get_boolean(CONFIG_SECTION_STATSD, "gaps on timers (deleteTimers)", 0))
         statsd.timers.default_options |= STATSD_METRIC_OPTION_SHOW_GAPS_WHEN_NOT_COLLECTED;
 
+    size_t max_sockets = (size_t)config_get_number(CONFIG_SECTION_STATSD, "statsd server max TCP sockets", (long long int)(rlimit_nofile.rlim_cur / 4));
+
 #ifdef STATSD_MULTITHREADED
     statsd.threads = (int)config_get_number(CONFIG_SECTION_STATSD, "threads", processors);
     if(statsd.threads < 1) {
@@ -2171,6 +2207,7 @@ void *statsd_main(void *ptr) {
 
     int i;
     for(i = 0; i < statsd.threads ;i++) {
+        statsd.collection_threads_status[i].max_sockets = max_sockets / statsd.threads;
         char tag[NETDATA_THREAD_TAG_MAX + 1];
         snprintfz(tag, NETDATA_THREAD_TAG_MAX, "STATSD_COLLECTOR[%d]", i + 1);
         netdata_thread_create(&statsd.collection_threads_status[i].thread, tag, NETDATA_THREAD_OPTION_DEFAULT, statsd_collector_thread, &statsd.collection_threads_status[i]);
@@ -2456,7 +2493,7 @@ void *statsd_main(void *ptr) {
         }
     }
 
-cleanup:
+cleanup: ; // added semi-colon to prevent older gcc error: label at end of compound statement
     netdata_thread_cleanup_pop(1);
     return NULL;
 }

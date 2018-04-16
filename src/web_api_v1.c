@@ -254,7 +254,7 @@ inline int web_client_api_request_v1_charts(RRDHOST *host, struct web_client *w,
 
 inline int web_client_api_request_v1_allmetrics(RRDHOST *host, struct web_client *w, char *url) {
     int format = ALLMETRICS_SHELL;
-    int help = 0, types = 0, names = backend_send_names; // prometheus options
+    int help = 0, types = 0, timestamps = 1, names = backend_send_names; // prometheus options
     const char *prometheus_server = w->client_ip;
     uint32_t prometheus_options = backend_options;
     const char *prometheus_prefix = backend_prefix;
@@ -297,6 +297,12 @@ inline int web_client_api_request_v1_allmetrics(RRDHOST *host, struct web_client
             else
                 names = 0;
         }
+        else if(!strcmp(name, "timestamps")) {
+            if(!strcmp(value, "yes"))
+                timestamps = 1;
+            else
+                timestamps = 0;
+        }
         else if(!strcmp(name, "server")) {
             prometheus_server = value;
         }
@@ -324,12 +330,12 @@ inline int web_client_api_request_v1_allmetrics(RRDHOST *host, struct web_client
 
         case ALLMETRICS_PROMETHEUS:
             w->response.data->contenttype = CT_PROMETHEUS;
-            rrd_stats_api_v1_charts_allmetrics_prometheus_single_host(host, w->response.data, prometheus_server, prometheus_prefix, prometheus_options, help, types, names);
+            rrd_stats_api_v1_charts_allmetrics_prometheus_single_host(host, w->response.data, prometheus_server, prometheus_prefix, prometheus_options, help, types, names, timestamps);
             return 200;
 
         case ALLMETRICS_PROMETHEUS_ALL_HOSTS:
             w->response.data->contenttype = CT_PROMETHEUS;
-            rrd_stats_api_v1_charts_allmetrics_prometheus_all_hosts(host, w->response.data, prometheus_server, prometheus_prefix, prometheus_options, help, types, names);
+            rrd_stats_api_v1_charts_allmetrics_prometheus_all_hosts(host, w->response.data, prometheus_server, prometheus_prefix, prometheus_options, help, types, names, timestamps);
             return 200;
 
         default:
@@ -361,6 +367,7 @@ int web_client_api_request_v1_badge(RRDHOST *host, struct web_client *w, char *u
     , *value_color = NULL
     , *refresh_str = NULL
     , *precision_str = NULL
+    , *scale_str = NULL
     , *alarm = NULL;
 
     int group = GROUP_AVERAGE;
@@ -404,6 +411,7 @@ int web_client_api_request_v1_badge(RRDHOST *host, struct web_client *w, char *u
         else if(!strcmp(name, "divide")) divide_str = value;
         else if(!strcmp(name, "refresh")) refresh_str = value;
         else if(!strcmp(name, "precision")) precision_str = value;
+        else if(!strcmp(name, "scale")) scale_str = value;
         else if(!strcmp(name, "alarm")) alarm = value;
     }
 
@@ -413,11 +421,13 @@ int web_client_api_request_v1_badge(RRDHOST *host, struct web_client *w, char *u
         goto cleanup;
     }
 
+    int scale = (scale_str && *scale_str)?str2i(scale_str):100;
+
     RRDSET *st = rrdset_find(host, chart);
     if(!st) st = rrdset_find_byname(host, chart);
     if(!st) {
         buffer_no_cacheable(w->response.data);
-        buffer_svg(w->response.data, "chart not found", NAN, "", NULL, NULL, -1, 0);
+        buffer_svg(w->response.data, "chart not found", NAN, "", NULL, NULL, -1, scale, 0);
         ret = 200;
         goto cleanup;
     }
@@ -428,7 +438,7 @@ int web_client_api_request_v1_badge(RRDHOST *host, struct web_client *w, char *u
         rc = rrdcalc_find(st, alarm);
         if (!rc) {
             buffer_no_cacheable(w->response.data);
-            buffer_svg(w->response.data, "alarm not found", NAN, "", NULL, NULL, -1, 0);
+            buffer_svg(w->response.data, "alarm not found", NAN, "", NULL, NULL, -1, scale, 0);
             ret = 200;
             goto cleanup;
         }
@@ -545,6 +555,7 @@ int web_client_api_request_v1_badge(RRDHOST *host, struct web_client *w, char *u
                 label_color,
                 value_color,
                 precision,
+                scale,
                 options
         );
         ret = 200;
@@ -581,6 +592,7 @@ int web_client_api_request_v1_badge(RRDHOST *host, struct web_client *w, char *u
                 label_color,
                 value_color,
                 precision,
+                scale,
                 options
         );
     }
