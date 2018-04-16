@@ -133,6 +133,7 @@
 #define NETDATA_CHART_PRIO_MEM_SYSTEM_PGFAULTS     1030
 #define NETDATA_CHART_PRIO_MEM_KERNEL              1100
 #define NETDATA_CHART_PRIO_MEM_SLAB                1200
+#define NETDATA_CHART_PRIO_MEM_HUGEPAGES           1250
 #define NETDATA_CHART_PRIO_MEM_KSM                 1300
 #define NETDATA_CHART_PRIO_MEM_NUMA                1400
 #define NETDATA_CHART_PRIO_MEM_HW                  1500
@@ -157,6 +158,12 @@
 #define NEVERNULL __attribute__((returns_nonnull))
 #else
 #define NEVERNULL
+#endif
+
+#ifdef HAVE_FUNC_ATTRIBUTE_NOINLINE
+#define NOINLINE __attribute__((noinline))
+#else
+#define NOINLINE
 #endif
 
 #ifdef HAVE_FUNC_ATTRIBUTE_MALLOC
@@ -315,6 +322,8 @@ extern void *mymmap(const char *filename, size_t size, int flags, int ksm);
 extern int memory_file_save(const char *filename, void *mem, size_t size);
 
 extern int fd_is_valid(int fd);
+
+extern struct rlimit rlimit_nofile;
 
 extern int enable_ksm;
 

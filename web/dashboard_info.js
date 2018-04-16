@@ -177,6 +177,12 @@ netdataDashboard.menu = {
         info: 'Network latency statistics, via <b>fping</b>. <b>fping</b> is a program to send ICMP echo probes to network hosts, similar to <code>ping</code>, but much better performing when pinging multiple hosts. fping versions after 3.15 can be directly used as netdata plugins.'
     },
 
+    'httpcheck': {
+        title: 'Http Check',
+        icon: '<i class="fas fa-heartbeat"></i>',
+        info: 'Web Service availability and latency monitoring using HTTP checks. This plugin is a specialized version of the port check plugin.'
+    },
+
     'memcached': {
         title: 'memcached',
         icon: '<i class="fas fa-database"></i>',
@@ -217,6 +223,12 @@ netdataDashboard.menu = {
         title: 'PHP-FPM',
         icon: '<i class="fas fa-eye"></i>',
         info: 'Performance metrics for <b>PHP-FPM</b>, an alternative FastCGI implementation for PHP.'
+    },
+
+    'portcheck': {
+        title: 'Port Check',
+        icon: '<i class="fas fa-heartbeat"></i>',
+        info: 'Service availability and latency monitoring using port checks.'
     },
 
     'postfix': {
@@ -341,6 +353,12 @@ netdataDashboard.menu = {
         title: 'Ceph',
         icon: '<i class="fas fa-database"></i>',
         info: 'Provides statistics on the <b><a href="http://ceph.com/">ceph</a></b> cluster server, the open-source distributed storage system.'
+    },
+
+    'ntpd': {
+        title: 'ntpd',
+        icon: '<i class="fas fa-clock"></i>',
+        info: 'Provides statistics for the internal variables of the Network Time Protocol daemon <b><a href="http://www.ntp.org/">ntpd</a></b> and optional including the configured peers (if enabled in the module configuration). The module presents the performance metrics as shown by <b><a href="http://doc.ntp.org/current-stable/ntpq.html">ntpq</a></b> (the standard NTP query program) using NTP mode 6 UDP packets to communicate with the NTP server.'
     }
 };
 
@@ -410,6 +428,10 @@ netdataDashboard.submenu = {
     'mem.ksm': {
         title: 'deduper (ksm)',
         info: 'Kernel Same-page Merging (KSM) performance monitoring, read from several files in <code>/sys/kernel/mm/ksm/</code>. KSM is a memory-saving de-duplication feature in the Linux kernel (since version 2.6.32). The KSM daemon ksmd periodically scans those areas of user memory which have been registered with it, looking for pages of identical content which can be replaced by a single write-protected page (which is automatically copied if a process later wants to update its content). KSM was originally developed for use with KVM (where it was known as Kernel Shared Memory), to fit more virtual machines into physical memory, by sharing the data common between them.  But it can be useful to any application which generates many instances of the same data.'
+    },
+
+    'mem.hugepages': {
+        info: 'Hugepages is a feature that allows the kernel to utilize the multiple page size capabilities of modern hardware architectures. The kernel creates multiple pages of virtual memory, mapped from both physical RAM and swap. There is a mechanism in the CPU architecture called "Translation Lookaside Buffers" (TLB) to manage the mapping of virtual memory pages to actual physical memory addresses. The TLB is a limited hardware resource, so utilizing a large amount of physical memory with the default page size consumes the TLB and adds processing overhead. By utilizing Huge Pages, the kernel is able to create pages of much larger sizes, each page consuming a single resource in the TLB. Huge Pages are pinned to physical RAM and cannot be swapped/paged out.'
     },
 
     'mem.numa': {
@@ -487,6 +509,16 @@ netdataDashboard.submenu = {
     'couchdb.erlang': {
         title: 'erlang statistics',
         info: 'Detailed information about the status of the Erlang VM that hosts CouchDB. These are intended for advanced users only. High values of the peak message queue (>10e6) generally indicate an overload condition.'
+    },
+
+    'ntpd.system': {
+        title: 'system',
+        info: 'Statistics of the system variables as shown by the readlist billboard <code>ntpq -c rl</code>. System variables are assigned an association ID of zero and can also be shown in the readvar billboard <code>ntpq -c "rv 0"</code>. These variables are used in the <a href="http://doc.ntp.org/current-stable/discipline.html">Clock Discipline Algorithm</a>, to calculate the lowest and most stable offset.'
+    },
+
+    'ntpd.peers': {
+        title: 'peers',
+        info: 'Statistics of the peer variables for each peer configured in <code>/etc/ntp.conf</code> as shown by the readvar billboard <code>ntpq -c "rv &lt;association&gt;"</code>, while each peer is assigned a nonzero association ID as shown by <code>ntpq -c "apeers"</code>. The module periodically scans for new/changed peers (default: every 60s). <b>ntpd</b> selects the best possible peer from the available peers to synchronize the clock. A minimum of at least 3 peers is required to properly identify the best possible peer.'
     }
 };
 
@@ -684,6 +716,14 @@ netdataDashboard.context = {
 
     'mem.slab': {
         info: '<b>Reclaimable</b> is the amount of memory which the kernel can reuse. <b>Unreclaimable</b> can not be reused even when the kernel is lacking memory.'
+    },
+
+    'mem.hugepages': {
+        info: 'Dedicated (or Direct) HugePages is memory reserved for applications configured to utilize huge pages. Hugepages are <b>used</b> memory, even if there are free hugepages available.'
+    },
+
+    'mem.transparent_hugepages': {
+        info: 'Transparent HugePages (THP) is backing virtual memory with huge pages, supporting automatic promotion and demotion of page sizes. It works for all applications for anonymous memory mappings and tmpfs/shmem.'
     },
 
     // ------------------------------------------------------------------------
@@ -990,6 +1030,66 @@ netdataDashboard.context = {
     },
 
     // ------------------------------------------------------------------------
+    // POSTGRESQL
+
+
+    'postgres.db_stat_blks': {
+        info: 'Blocks reads from disk or cache.<ul>' +
+        '<li><strong>blks_read:</strong> number of disk blocks read in this database.</li>' +
+        '<li><strong>blks_hit:</strong> number of times disk blocks were found already in the buffer cache, so that a read was not necessary (this only includes hits in the PostgreSQL buffer cache, not the operating system&#39;s file system cache)</li>' +
+        '</ul>'
+    },
+    'postgres.db_stat_tuple_write': {
+        info: '<ul><li>Number of rows inserted/updated/deleted.</li>' +
+        '<li><strong>conflicts:</strong> number of queries canceled due to conflicts with recovery in this database. (Conflicts occur only on standby servers; see <a href="https://www.postgresql.org/docs/10/static/monitoring-stats.html#PG-STAT-DATABASE-CONFLICTS-VIEW" target="_blank">pg_stat_database_conflicts</a> for details.)</li>' +
+        '</ul>'
+    },
+    'postgres.db_stat_temp_bytes': {
+        info: 'Temporary files can be created on disk for sorts, hashes, and temporary query results.'
+    },
+    'postgres.db_stat_temp_files': {
+        info: '<ul>' +
+        '<li><strong>files:</strong> number of temporary files created by queries. All temporary files are counted, regardless of why the temporary file was created (e.g., sorting or hashing).</li>' +
+        '</ul>'
+    },
+    'postgres.archive_wal': {
+         info: 'WAL archiving.<ul>' +
+        '<li><strong>total:</strong> total files.</li>' +
+        '<li><strong>ready:</strong> WAL waiting to be archived.</li>' +
+        '<li><strong>done:</strong> WAL successfully archived' +
+        'Ready WAL can indicate archive_command is in error, see <a href="https://www.postgresql.org/docs/current/static/continuous-archiving.html" target="_blank">Continuous Archiving and Point-in-Time Recovery</a>.</li>' +
+        '</ul>'
+    },
+    'postgres.checkpointer': {
+        info: 'Number of checkpoints.<ul>' +
+        '<li><strong>scheduled:</strong> when checkpoint_timeout is reached.</li>' +
+        '<li><strong>requested:</strong> when max_wal_size is reached.</li>' +
+        '</ul>' +
+        'For more information see <a href="https://www.postgresql.org/docs/current/static/wal-configuration.html" target="_blank">WAL Configuration</a>.'
+    },
+    'postgres.autovacuum': {
+        info: 'PostgreSQL databases require periodic maintenance known as vacuuming. For many installations, it is sufficient to let vacuuming be performed by the autovacuum daemon.' +
+        'For more information see <a href="https://www.postgresql.org/docs/current/static/routine-vacuuming.html#AUTOVACUUM" target="_blank">The Autovacuum Daemon</a>.'
+    },
+    'postgres.standby_delta': {
+        info: 'Streaming replication delta.<ul>' +
+        '<li><strong>sent_delta:</strong> replication delta sent to standby.</li>' +
+        '<li><strong>write_delta:</strong> replication delta written to disk by this standby.</li>' +
+        '<li><strong>flush_delta:</strong> replication delta flushed to disk by this standby server.</li>' +
+        '<li><strong>replay_delta:</strong> replication delta replayed into the database on this standby server.</li>' +
+        '</ul>' +
+        'For more information see <a href="https://www.postgresql.org/docs/current/static/warm-standby.html#SYNCHRONOUS-REPLICATION" target="_blank">Synchronous Replication</a>.'
+    },
+    'postgres.replication_slot': {
+        info: 'Replication slot files.<ul>' +
+        '<li><strong>wal_keeped:</strong> WAL files retained by each replication slots.</li>' +
+        '<li><strong>pg_replslot_files:</strong> files present in pg_replslot.</li>' +
+        '</ul>' +
+        'For more information see <a href="https://www.postgresql.org/docs/current/static/warm-standby.html#STREAMING-REPLICATION-SLOTS" target="_blank">Replication Slots</a>.'
+    },
+
+
+    // ------------------------------------------------------------------------
     // APACHE
 
     'apache.connections': {
@@ -1125,6 +1225,25 @@ netdataDashboard.context = {
         mainheads: [
             netdataDashboard.gaugeChart('Requests', '12%', '', NETDATA.colors[0])
         ]
+    },
+
+    // ------------------------------------------------------------------------
+    // HTTP check
+
+    'httpcheck.responsetime': {
+        info: 'The <code>response time</code> describes the time passed between request and response. ' +
+        'Currently, the accuracy of the response time is low and should be used as reference only.'
+    },
+
+    'httpcheck.responselength': {
+        info: 'The <code>response length</code> counts the number of characters in the response body. For static pages, this should be mostly constant.'
+    },
+
+    'httpcheck.status': {
+        valueRange: "[0, 1]",
+        info: 'This chart verifies the response of the webserver. Each status dimension will have a value of <code>1</code> if triggered. ' +
+        'Dimension <code>success</code> is <code>1</code> only if all constraints are satisfied.' +
+        'This chart is most useful for alarms or third-party apps.'
     },
 
     // ------------------------------------------------------------------------
@@ -1719,6 +1838,21 @@ netdataDashboard.context = {
     },
 
     // ------------------------------------------------------------------------
+    // Port check
+
+    'portcheck.latency': {
+        info: 'The <code>latency</code> describes the time spent connecting to a TCP port. No data is sent or received. ' +
+        'Currently, the accuracy of the latency is low and should be used as reference only.'
+    },
+
+    'portcheck.status': {
+        valueRange: "[0, 1]",
+        info: 'The <code>status</code> chart verifies the availability of the service. ' +
+        'Each status dimension will have a value of <code>1</code> if triggered. Dimension <code>success</code> is <code>1</code> only if connection could be established.' +
+        'This chart is most useful for alarms and third-party apps.'
+    },
+
+    // ------------------------------------------------------------------------
 
     'chrony.system': {
         info: 'In normal operation, chronyd never steps the system clock, because any jump in the timescale can have adverse consequences for certain application programs. Instead, any error in the system clock is corrected by slightly speeding up or slowing down the system clock until the error has been removed, and then returning to the system clock’s normal speed. A consequence of this is that there will be a period when the system clock (as read by other programs using the <code>gettimeofday()</code> system call, or by the <code>date</code> command in the shell) will be different from chronyd\'s estimate of the current true time (which it reports to NTP clients when it is operating in server mode). The value reported on this line is the difference due to this effect.',
@@ -1771,7 +1905,7 @@ netdataDashboard.context = {
     },
 
     'btrfs.disk': {
-        info: 'Physical disk usage of BTRFS. The disk space reported here is the raw physical disk space assigned to the BTRFS volume (i.e. <b>before any RAID levels</b>). BTRFS uses a two-stage allocator, first allocating large regions of disk space for one type of block (data, metadata, or system), and then using a regular block allocator inside those regions. <code>unallocated</code> is the physical disk space that is not allocated yet and is available to become data, metdata or system on demand. When <code>unallocated</code> is zero, all available disk space has been allocated to a specific function. Healthy volumes should ideally have at least five percent of their total space <code>unallocated</code>. You can keep your volume healthy by running the <code>btrfs balance</code> command on it regularly (check <code>man btrfs-balance</code> for more info).'
+        info: 'Physical disk usage of BTRFS. The disk space reported here is the raw physical disk space assigned to the BTRFS volume (i.e. <b>before any RAID levels</b>). BTRFS uses a two-stage allocator, first allocating large regions of disk space for one type of block (data, metadata, or system), and then using a regular block allocator inside those regions. <code>unallocated</code> is the physical disk space that is not allocated yet and is available to become data, metdata or system on demand. When <code>unallocated</code> is zero, all available disk space has been allocated to a specific function. Healthy volumes should ideally have at least five percent of their total space <code>unallocated</code>. You can keep your volume healthy by running the <code>btrfs balance</code> command on it regularly (check <code>man btrfs-balance</code> for more info).  Note that some of the spac elisted as <code>unallocated</code> may not actually be usable if the volume uses devices of different sizes.'
     },
 
     'btrfs.data': {
@@ -1783,7 +1917,7 @@ netdataDashboard.context = {
     },
 
     'btrfs.system': {
-        info: 'Logical disk usage for BTRFS system. System chunks store information aobut the allocation of other chunks. The disk space reported here is the usable allocation (i.e. after any striping or replication). The values reported here should be relatively small compared to Data and Metadata, and will scale with the volume size and overall space usage.'
+        info: 'Logical disk usage for BTRFS system. System chunks store information about the allocation of other chunks. The disk space reported here is the usable allocation (i.e. after any striping or replication). The values reported here should be relatively small compared to Data and Metadata, and will scale with the volume size and overall space usage.'
     },
 
     // ------------------------------------------------------------------------
@@ -1835,6 +1969,102 @@ netdataDashboard.context = {
     'rabbitmq.disk_space': {
         info: 'Total amount of disk space consumed by the message store(s).  See <code><a href="https://www.rabbitmq.com/production-checklist.html#resource-limits-disk-space" target=_"blank">Disk Space Limits</a></code> for further details.',
         colors: NETDATA.colors[3]
+    },
+
+    // ------------------------------------------------------------------------
+    // ntpd
+
+    'ntpd.sys_offset': {
+        info: 'For hosts without any time critical services an offset of &lt; 100 ms should be acceptable even with high network latencies. For hosts with time critical services an offset of about 0.01 ms or less can be achieved by using peers with low delays and configuring optimal <b>poll exponent</b> values.',
+        colors: NETDATA.colors[4]
+    },
+
+    'ntpd.sys_jitter': {
+        info: 'The jitter statistics are exponentially-weighted RMS averages. The system jitter is defined in the NTPv4 specification; the clock jitter statistic is computed by the clock discipline module.'
+    },
+
+    'ntpd.sys_frequency': {
+        info: 'The frequency offset is shown in ppm (parts per million) relative to the frequency of the system. The frequency correction needed for the clock can vary significantly between boots and also due to external influences like temperature or radiation.',
+        colors: NETDATA.colors[2],
+        height: 0.6
+    },
+
+    'ntpd.sys_wander': {
+        info: 'The wander statistics are exponentially-weighted RMS averages.',
+        colors: NETDATA.colors[3],
+        height: 0.6
+    },
+
+    'ntpd.sys_rootdelay': {
+        info: 'The rootdelay is the round-trip delay to the primary reference clock, similar to the delay shown by the <code>ping</code> command. A lower delay should result in a lower clock offset.',
+        colors: NETDATA.colors[1]
+    },
+
+    'ntpd.sys_stratum': {
+        info: 'The distance in "hops" to the primary reference clock',
+        colors: NETDATA.colors[5],
+        height: 0.3
+    },
+
+    'ntpd.sys_tc': {
+        info: 'Time constants and poll intervals are expressed as exponents of 2. The default poll exponent of 6 corresponds to a poll interval of 64 s. For typical Internet paths, the optimum poll interval is about 64 s. For fast LANs with modern computers, a poll exponent of 4 (16 s) is appropriate. The <a href="http://doc.ntp.org/current-stable/poll.html">poll process</a> sends NTP packets at intervals determined by the clock discipline algorithm.',
+        height: 0.5
+    },
+
+    'ntpd.sys_precision': {
+        colors: NETDATA.colors[6],
+        height: 0.2
+    },
+
+    'ntpd.peer_offset': {
+        info: 'The offset of the peer clock relative to the system clock in milliseconds. Smaller values here weight peers more heavily for selection after the initial synchronization of the local clock. For a system providing time service to other systems, these should be as low as possible.'
+    },
+
+    'ntpd.peer_delay': {
+        info: 'The round-trip time (RTT) for communication with the peer, similar to the delay shown by the <code>ping</code> command. Not as critical as either the offset or jitter, but still factored into the selection algorithm (because as a general rule, lower delay means more accurate time). In most cases, it should be below 100ms.'
+    },
+
+    'ntpd.peer_dispersion': {
+        info: 'This is a measure of the estimated error between the peer and the local system. Lower values here are better.'
+    },
+
+    'ntpd.peer_jitter': {
+        info: 'This is essentially a remote estimate of the peer\'s <code>system_jitter</code> value. Lower values here weight highly in favor of peer selection, and this is a good indicator of overall quality of a given time server (good servers will have values not exceeding single digit milliseconds here, with high quality stratum one servers regularly having sub-millisecond jitter).'
+    },
+
+    'ntpd.peer_xleave': {
+        info: 'This variable is used in interleaved mode (used only in NTP symmetric and broadcast modes). See <a href="http://doc.ntp.org/current-stable/xleave.html">NTP Interleaved Modes</a>.'
+    },
+
+    'ntpd.peer_rootdelay': {
+        info: 'For a stratum 1 server, this is the access latency for the reference clock. For lower stratum servers, it is the sum of the <code>peer_delay</code> and <code>peer_rootdelay</code> for the system they are syncing off of. Similarly to <code>peer_delay</code>, lower values here are technically better, but have limited influence in peer selection.'
+    },
+
+    'ntpd.peer_rootdisp': {
+        info: 'Is the same as <code>peer_rootdelay</code>, but measures accumulated <code>peer_dispersion</code> instead of accumulated <code>peer_delay</code>.'
+    },
+
+    'ntpd.peer_hmode': {
+        info: 'The <code>peer_hmode</code> and <code>peer_pmode</code> variables give info about what mode the packets being sent to and received from a given peer are. Mode 1 is symmetric active (both the local system and the remote peer have each other declared as peers in <code>/etc/ntp.conf</code>), Mode 2 is symmetric passive (only one side has the other declared as a peer), Mode 3 is client, Mode 4 is server, and Mode 5 is broadcast (also used for multicast and manycast operation).',
+        height: 0.2
+    },
+
+    'ntpd.peer_pmode': {
+        height: 0.2
+    },
+
+    'ntpd.peer_hpoll': {
+        info: 'The <code>peer_hpoll</code> and <code>peer_ppoll</code> variables are log2 representations of the polling interval in seconds.',
+        height: 0.5
+    },
+
+    'ntpd.peer_ppoll': {
+        height: 0.5
+    },
+
+    'ntpd.peer_precision': {
+        height: 0.2
     }
+
     // ------------------------------------------------------------------------
 };

@@ -25,6 +25,11 @@
 
 #define START_STREAMING_PROMPT "Hit me baby, push them over..."
 
+typedef enum {
+    RRDPUSH_MULTIPLE_CONNECTIONS_ALLOW,
+    RRDPUSH_MULTIPLE_CONNECTIONS_DENY_NEW
+} RRDPUSH_MULTIPLE_CONNECTIONS_STRATEGY;
+
 int default_rrdpush_enabled = 0;
 char *default_rrdpush_destination = NULL;
 char *default_rrdpush_api_key = NULL;
@@ -86,7 +91,7 @@ static inline void rrdpush_send_chart_definition_nolock(RRDSET *st) {
     // send the chart
     buffer_sprintf(
             host->rrdpush_sender_buffer
-            , "CHART \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" %ld %d \"%s %s %s\" \"%s\" \"%s\"\n"
+            , "CHART \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" %ld %d \"%s %s %s %s\" \"%s\" \"%s\"\n"
             , st->id
             , st->name
             , st->title
@@ -99,6 +104,7 @@ static inline void rrdpush_send_chart_definition_nolock(RRDSET *st) {
             , rrdset_flag_check(st, RRDSET_FLAG_OBSOLETE)?"obsolete":""
             , rrdset_flag_check(st, RRDSET_FLAG_DETAIL)?"detail":""
             , rrdset_flag_check(st, RRDSET_FLAG_STORE_FIRST)?"store_first":""
+            , rrdset_flag_check(st, RRDSET_FLAG_HIDDEN)?"hidden":""
             , (st->plugin_name)?st->plugin_name:""
             , (st->module_name)?st->module_name:""
     );
@@ -358,7 +364,7 @@ static int rrdpush_sender_thread_connect_to_master(RRDHOST *host, int default_po
     char http[HTTP_HEADER_SIZE + 1];
     snprintfz(http, HTTP_HEADER_SIZE,
             "STREAM key=%s&hostname=%s&registry_hostname=%s&machine_guid=%s&update_every=%d&os=%s&timezone=%s&tags=%s HTTP/1.1\r\n"
-                    "User-Agent: netdata-push-service/%s\r\n"
+                    "User-Agent: %s/%s\r\n"
                     "Accept: */*\r\n\r\n"
               , host->rrdpush_send_api_key
               , host->hostname
@@ -368,7 +374,8 @@ static int rrdpush_sender_thread_connect_to_master(RRDHOST *host, int default_po
               , host->os
               , host->timezone
               , (host->tags)?host->tags:""
-              , program_version
+              , host->program_name
+              , host->program_version
     );
 
     if(send_timeout(host->rrdpush_sender_socket, http, strlen(http), 0, timeout) == -1) {
@@ -686,7 +693,49 @@ static void log_stream_connection(const char *client_ip, const char *client_port
     log_access("STREAM: %d '[%s]:%s' '%s' host '%s' api key '%s' machine guid '%s'", gettid(), client_ip, client_port, msg, host, api_key, machine_guid);
 }
 
-static int rrdpush_receive(int fd, const char *key, const char *hostname, const char *registry_hostname, const char *machine_guid, const char *os, const char *timezone, const char *tags, int update_every, char *client_ip, char *client_port) {
+static RRDPUSH_MULTIPLE_CONNECTIONS_STRATEGY get_multiple_connections_strategy(struct config *c, const char *section, const char *name, RRDPUSH_MULTIPLE_CONNECTIONS_STRATEGY def) {
+    char *value;
+    switch(def) {
+        default:
+        case RRDPUSH_MULTIPLE_CONNECTIONS_ALLOW:
+            value = "allow";
+            break;
+
+        case RRDPUSH_MULTIPLE_CONNECTIONS_DENY_NEW:
+            value = "deny";
+            break;
+    }
+
+    value = appconfig_get(c, section, name, value);
+
+    RRDPUSH_MULTIPLE_CONNECTIONS_STRATEGY ret = def;
+
+    if(strcasecmp(value, "allow") == 0 || strcasecmp(value, "permit") == 0 || strcasecmp(value, "accept") == 0)
+        ret = RRDPUSH_MULTIPLE_CONNECTIONS_ALLOW;
+
+    else if(strcasecmp(value, "deny") == 0 || strcasecmp(value, "reject") == 0 || strcasecmp(value, "block") == 0)
+        ret = RRDPUSH_MULTIPLE_CONNECTIONS_DENY_NEW;
+
+    else
+        error("Invalid stream config value at section [%s], setting '%s', value '%s'", section, name, value);
+
+    return ret;
+}
+
+static int rrdpush_receive(int fd
+                           , const char *key
+                           , const char *hostname
+                           , const char *registry_hostname
+                           , const char *machine_guid
+                           , const char *os
+                           , const char *timezone
+                           , const char *tags
+                           , const char *program_name
+                           , const char *program_version
+                           , int update_every
+                           , char *client_ip
+                           , char *client_port
+) {
     RRDHOST *host;
     int history = default_rrd_history_entries;
     RRD_MEMORY_MODE mode = default_rrd_memory_mode;
@@ -695,6 +744,7 @@ static int rrdpush_receive(int fd, const char *key, const char *hostname, const 
     char *rrdpush_destination = default_rrdpush_destination;
     char *rrdpush_api_key = default_rrdpush_api_key;
     time_t alarms_delay = 60;
+    RRDPUSH_MULTIPLE_CONNECTIONS_STRATEGY rrdpush_multiple_connections_strategy = RRDPUSH_MULTIPLE_CONNECTIONS_ALLOW;
 
     update_every = (int)appconfig_get_number(&stream_config, machine_guid, "update every", update_every);
     if(update_every < 0) update_every = 1;
@@ -721,6 +771,9 @@ static int rrdpush_receive(int fd, const char *key, const char *hostname, const 
     rrdpush_api_key = appconfig_get(&stream_config, key, "default proxy api key", rrdpush_api_key);
     rrdpush_api_key = appconfig_get(&stream_config, machine_guid, "proxy api key", rrdpush_api_key);
 
+    rrdpush_multiple_connections_strategy = get_multiple_connections_strategy(&stream_config, key, "multiple connections", rrdpush_multiple_connections_strategy);
+    rrdpush_multiple_connections_strategy = get_multiple_connections_strategy(&stream_config, machine_guid, "multiple connections", rrdpush_multiple_connections_strategy);
+
     tags = appconfig_set_default(&stream_config, machine_guid, "host tags", (tags)?tags:"");
     if(tags && !*tags) tags = NULL;
 
@@ -734,6 +787,8 @@ static int rrdpush_receive(int fd, const char *key, const char *hostname, const 
                 , os
                 , timezone
                 , tags
+                , program_name
+                , program_version
                 , update_every
                 , history
                 , mode
@@ -804,8 +859,20 @@ static int rrdpush_receive(int fd, const char *key, const char *hostname, const 
     }
 
     rrdhost_wrlock(host);
-    if(host->connected_senders > 0)
-        info("STREAM %s [receive from [%s]:%s]: multiple streaming connections for the same host detected. If multiple netdata are pushing metrics for the same charts, at the same time, the result is unexpected.", host->hostname, client_ip, client_port);
+    if(host->connected_senders > 0) {
+        switch(rrdpush_multiple_connections_strategy) {
+            case RRDPUSH_MULTIPLE_CONNECTIONS_ALLOW:
+                info("STREAM %s [receive from [%s]:%s]: multiple streaming connections for the same host detected. If multiple netdata are pushing metrics for the same charts, at the same time, the result is unexpected.", host->hostname, client_ip, client_port);
+                break;
+
+            case RRDPUSH_MULTIPLE_CONNECTIONS_DENY_NEW:
+                rrdhost_unlock(host);
+                log_stream_connection(client_ip, client_port, key, host->machine_guid, host->hostname, "REJECTED - ALREADY CONNECTED");
+                info("STREAM %s [receive from [%s]:%s]: multiple streaming connections for the same host detected. Rejecting new connection.", host->hostname, client_ip, client_port);
+                fclose(fp);
+                return 0;
+        }
+    }
 
     rrdhost_flag_clear(host, RRDHOST_FLAG_ORPHAN);
     host->connected_senders++;
@@ -860,6 +927,8 @@ struct rrdpush_thread {
     char *tags;
     char *client_ip;
     char *client_port;
+    char *program_name;
+    char *program_version;
     int update_every;
 };
 
@@ -880,6 +949,8 @@ static void rrdpush_receiver_thread_cleanup(void *ptr) {
         freez(rpt->tags);
         freez(rpt->client_ip);
         freez(rpt->client_port);
+        freez(rpt->program_name);
+        freez(rpt->program_version);
         freez(rpt);
     }
 }
@@ -899,6 +970,8 @@ static void *rrdpush_receiver_thread(void *ptr) {
                 , rpt->os
                 , rpt->timezone
                 , rpt->tags
+                , rpt->program_name
+                , rpt->program_version
                 , rpt->update_every
                 , rpt->client_ip
                 , rpt->client_port
@@ -1037,7 +1110,7 @@ int rrdpush_receiver_thread_spawn(RRDHOST *host, struct web_client *w, char *url
         }
     }
 
-    struct rrdpush_thread *rpt = mallocz(sizeof(struct rrdpush_thread));
+    struct rrdpush_thread *rpt = callocz(1, sizeof(struct rrdpush_thread));
     rpt->fd                = w->ifd;
     rpt->key               = strdupz(key);
     rpt->hostname          = strdupz(hostname);
@@ -1049,6 +1122,18 @@ int rrdpush_receiver_thread_spawn(RRDHOST *host, struct web_client *w, char *url
     rpt->client_ip         = strdupz(w->client_ip);
     rpt->client_port       = strdupz(w->client_port);
     rpt->update_every      = update_every;
+
+    if(w->user_agent && w->user_agent[0]) {
+        char *t = strchr(w->user_agent, '/');
+        if(t && *t) {
+            *t = '\0';
+            t++;
+        }
+
+        rpt->program_name = strdupz(w->user_agent);
+        if(t && *t) rpt->program_version = strdupz(t);
+    }
+
     netdata_thread_t thread;
 
     debug(D_SYSTEM, "starting STREAM receive thread.");

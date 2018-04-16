@@ -44,6 +44,8 @@ dist_pythonconfig_DATA = \
     python.d/go_expvar.conf \
     python.d/haproxy.conf \
     python.d/hddtemp.conf \
+    python.d/httpcheck.conf \
+    python.d/icecast.conf \
     python.d/ipfs.conf \
     python.d/isc_dhcpd.conf \
     python.d/mdstat.conf \
@@ -53,8 +55,10 @@ dist_pythonconfig_DATA = \
     python.d/nginx.conf \
     python.d/nginx_plus.conf \
     python.d/nsd.conf \
+    python.d/ntpd.conf \
     python.d/ovpn_status_log.conf \
     python.d/phpfpm.conf \
+    python.d/portcheck.conf \
     python.d/postfix.conf \
     python.d/postgres.conf \
     python.d/powerdns.conf \
@@ -63,9 +67,11 @@ dist_pythonconfig_DATA = \
     python.d/retroshare.conf \
     python.d/samba.conf \
     python.d/sensors.conf \
+    python.d/springboot.conf \
     python.d/squid.conf \
     python.d/smartd_log.conf \
     python.d/tomcat.conf \
+    python.d/traefik.conf \
     python.d/varnish.conf \
     python.d/web_log.conf \
     $(NULL)
@@ -85,7 +91,9 @@ dist_healthconfig_DATA = \
     health.d/elasticsearch.conf \
     health.d/entropy.conf \
     health.d/fping.conf \
+    health.d/fronius.conf \
     health.d/haproxy.conf \
+    health.d/httpcheck.conf \
     health.d/ipc.conf \
     health.d/ipfs.conf \
     health.d/ipmi.conf \
@@ -101,6 +109,7 @@ dist_healthconfig_DATA = \
     health.d/netfilter.conf \
     health.d/nginx.conf \
     health.d/nginx_plus.conf \
+    health.d/portcheck.conf \
     health.d/postgres.conf \
     health.d/qos.conf \
     health.d/ram.conf \
@@ -108,6 +117,7 @@ dist_healthconfig_DATA = \
     health.d/retroshare.conf \
     health.d/softnet.conf \
     health.d/squid.conf \
+    health.d/stiebeleltron.conf \
     health.d/swap.conf \
     health.d/tcp_conn.conf \
     health.d/tcp_listen.conf \
