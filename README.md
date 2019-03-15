@@ -146,7 +146,42 @@ It has been designed by **SysAdmins**, **DevOps** and **Developers** for trouble
 not just visualize metrics.
 
 ## News  
-  
+
+`Mar 14th, 2019` - **[netdata v1.13.0 released!](https://github.com/netdata/netdata/releases)** 
+
+Release 1.13.0 contains 14 bug fixes and 8 improvements.
+
+netdata has taken the first step into the world of Kubernetes, with a beta version of a [Helm chart](https://github.com/netdata/helmchart) for deployment to a k8s cluster and [proper naming](https://github.com/netdata/netdata/pull/5576) of the cgroup containers. We have [big plans](https://github.com/netdata/netdata/issues/5392) for Kubernetes, so stay tuned!
+
+A [major refactoring of the python.d plugin](https://github.com/netdata/netdata/pull/5552) has resulted in a dramatic decrease of the required memory, making netdata even more resource efficient.
+
+We also added charts for IPC shared memory segments and total memory used.
+
+`Feb 28th, 2019` - **[netdata v1.12.2 released!](https://github.com/netdata/netdata/releases)** 
+
+Patch release 1.12.2 contains 7 bug fixes and 4 improvements.
+
+The main motivation behind a new patch release is the introduction of a **stable release channel**.
+A "stable" installation and update channel was always on our roadmap, but it became a necessity when we realized that our users in China could not use the nightly releases published on Google Cloud. The "stable" channel is based on our official GitHub releases and uses assets hosted on GitHub. 
+
+We are also introducing a new **Oracle DB collector** module, implemented in Python.  
+
+`Feb 21st, 2019` - **[netdata v1.12.1 released!](https://github.com/netdata/netdata/releases)** 
+
+Patch release 1.12.1 contains 22 bug fixes and 8 improvements.
+
+`Feb 14th, 2019` - **[netdata v1.12.0 released!](https://github.com/netdata/netdata/releases)** 
+
+Release 1.12 is made out of 211 pull requests and 22 bug fixes.
+The key improvements are:
+
+- Introducing `netdata.cloud`, the free netdata service for all netdata users
+- High performance plugins with go.d.plugin (data collection orchestrator written in Go)
+- 7 new data collectors and 11 rewrites of existing data collectors for improved performance
+- A new management API for all netdata servers
+- Bind different functions of the netdata APIs to different ports
+- Improved installation and updates
+
 `Nov 22nd, 2018` - **[netdata v1.11.1 released!](https://github.com/netdata/netdata/releases)**  
 
 - Improved internal database to support values above 64bit.
