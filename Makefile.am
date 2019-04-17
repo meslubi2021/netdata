@@ -15,6 +15,9 @@ MAINTAINERCLEANFILES= \
 	$(srcdir)/m4/ltoptions.m4 \
 	$(srcdir)/pkcs11-helper.spec $(srcdir)/config-w32-vc.h
 
+CLEANFILES= \
+	$(srcdir)/$(distdir).tar.gz
+
 EXTRA_DIST = \
 	.gitignore \
 	.codacy.yml \
@@ -71,7 +74,9 @@ dist_noinst_DATA= \
 # should be proper init.d/openrc/systemd usable
 dist_noinst_SCRIPTS= \
 	coverity-scan.sh \
+	coverity-install.sh \
 	packaging/installer/netdata-updater.sh \
+	packaging/installer/netdata-uninstaller.sh \
 	packaging/installer/kickstart.sh \
 	packaging/installer/kickstart-static64.sh \
 	packaging/installer/functions.sh \
@@ -107,6 +112,7 @@ AM_CFLAGS = \
 	$(OPTIONAL_LIBCAP_LIBS) \
 	$(OPTIONAL_IPMIMONITORING_CFLAGS) \
 	$(OPTIONAL_CUPS_CFLAGS) \
+	$(OPTIONAL_XENSTAT_CFLAGS) \
 	$(NULL)
 
 sbin_PROGRAMS =
@@ -221,6 +227,11 @@ CUPS_PLUGIN_FILES = \
 
 NFACCT_PLUGIN_FILES = \
 	collectors/nfacct.plugin/plugin_nfacct.c \
+    $(LIBNETDATA_FILES) \
+    $(NULL)
+
+XENSTAT_PLUGIN_FILES = \
+    collectors/xenstat.plugin/xenstat_plugin.c \
     $(LIBNETDATA_FILES) \
     $(NULL)
 
@@ -509,5 +520,14 @@ if ENABLE_PLUGIN_NFACCT
     nfacct_plugin_LDADD = \
         $(NETDATA_COMMON_LIBS) \
         $(OPTIONAL_NFACCT_LIBS) \
+        $(NULL)
+endif
+
+if ENABLE_PLUGIN_XENSTAT
+    plugins_PROGRAMS += xenstat.plugin
+    xenstat_plugin_SOURCES = $(XENSTAT_PLUGIN_FILES)
+    xenstat_plugin_LDADD = \
+        $(NETDATA_COMMON_LIBS) \
+        $(OPTIONAL_XENSTAT_LIBS) \
         $(NULL)
 endif
